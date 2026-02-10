@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Costantino
+    given-names: Giuseppe
+title: "trajmod: Simple GNSS Trajectory Modeling"
+version: 0.1.0
+date-released: 2026-02-10
+url: "https://github.com/gcostantino/trajmod"
+license: MIT
+repository-code: "https://github.com/gcostantino/trajmod"
+keywords:
+  - GNSS
+  - geodesy
+  - trajectory modeling
+  - postseismic relaxation
+  - time series analysis
+abstract: >
+  A Python library for modeling GNSS displacement time series
+  with advanced multi-tier postseismic filtering, supporting
+  earthquake co-seismic offsets, postseismic relaxation, slow
+  slip events, and event-type discrimination.
