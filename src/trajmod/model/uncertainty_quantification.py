@@ -18,26 +18,6 @@ class UncertaintyResults:
     correlation_matrix: np.ndarray
     variance_inflation_factors: Optional[np.ndarray] = None
 
-    def get_ci(self, param_idx: int, confidence: float = 0.95) -> Tuple[float, float]:
-        """Get confidence interval for a parameter.
-
-        Args:
-            param_idx: Parameter index
-            confidence: Confidence level
-
-        Returns:
-            Tuple of (lower, upper) bounds
-        """
-        from scipy.stats import norm
-        z = norm.ppf((1 + confidence) / 2)
-        se = self.standard_errors[param_idx]
-
-        # Assuming normal approximation
-        margin = z * se
-        center = 0  # This should be the coefficient value
-
-        return (center - margin, center + margin)
-
 
 class UncertaintyQuantifier:
     """Compute uncertainty estimates for fitted models."""
