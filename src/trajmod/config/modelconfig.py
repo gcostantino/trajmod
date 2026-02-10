@@ -58,14 +58,22 @@ class ModelConfig:
     bspline_knots: int = 20
     bspline_degree: int = 3
 
+
     def __post_init__(self):
         """Validate configuration parameters."""
         if self.d_param is not None and self.d_param <= 0:
             raise ValueError(f"d_param must be positive, got {self.d_param}")
+
         if self.postseismic_mag_threshold < 0:
             raise ValueError("postseismic_mag_threshold must be non-negative")
+
+        # NEW: Validate min step amplitude
+        if self.postseismic_min_step_amplitude < 0:
+            raise ValueError("postseismic_min_step_amplitude must be non-negative")
+
         if any(tau <= 0 for tau in self.tau_grid):
             raise ValueError("All tau_grid values must be positive")
+
         valid_criteria = ['aic', 'bic', 'ftest', 'always']
         if self.postseismic_selection_criterion not in valid_criteria:
             raise ValueError(f"postseismic_selection_criterion must be one of {valid_criteria}")
