@@ -1,6 +1,15 @@
-# trajmod
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gcostantino/trajmod/refs/heads/main/assets/logo.png" alt="trajmod logo" width="400"/>
+</p>
 
-**Simple GNSS time series Trajectory Modeling**
+---
+**Simple GNSS time series Trajectory Modeling.**
+
+[![PyPI version](https://img.shields.io/pypi/v/trajmod)](https://pypi.org/project/trajmod/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/trajmod)](https://pypi.org/project/trajmod/)
+[![Downloads](https://img.shields.io/pypi/dm/trajmod?style=round-square)](https://pepy.tech/project/trajmod)
+
 
 A Python library for modeling GNSS position time series with support for:
 - Secular trends, acceleration and seasonal components
