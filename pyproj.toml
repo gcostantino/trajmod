@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnss-trajectory-modeling"
+version = "0.1.0"
+description = "Simple GNSS trajectory modeling with SSE and earthquake detection"
+authors = [{name = "Giuseppe Costantino"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "matplotlib>=3.3",
+    "scikit-learn>=1.0",
+    "pyproj>=3.0",
+    "statsmodels>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "mypy>=0.950",
+    "flake8>=4.0",
+]
+
+[tool.setuptools]
+packages = ["gnss_trajectory_modeling"]
