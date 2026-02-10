@@ -1,24 +1,21 @@
-"""GNSS Trajectory Modeling Library - Refactored."""
+"""trajmod: Simple GNSS trajectory modeling.
 
-__version__ = "2.0.0"
+A Python library for modeling GNSS displacement time series with support for
+earthquakes, slow slip events, and advanced multi-tier postseismic filtering.
+"""
+
+__version__ = "0.1.0"
 __author__ = "Giuseppe Costantino"
+__license__ = "MIT"
 
-from src.trajmod.config.modelconfig import ModelConfig
-from src.trajmod.model.model import TrajectoryModel
-from src.trajmod.events.events import SSEEvent, EarthquakeEvent, SSECatalog, EarthquakeCatalog
-from src.trajmod.model.results import ModelResults
-from src.trajmod.strategies.fitting import OLSFitter, LassoFitter, ElasticNetFitter, IterativeRefinementFitter
+# Import main classes for convenient access
+from trajmod.model.model import TrajectoryModel
+from trajmod.config.modelconfig import ModelConfig
+from trajmod.model.results import ModelResults
 
 __all__ = [
-    "ModelConfig",
     "TrajectoryModel",
-    "SSEEvent",
-    "EarthquakeEvent",
-    "SSECatalog",
-    "EarthquakeCatalog",
+    "ModelConfig",
     "ModelResults",
-    "OLSFitter",
-    "LassoFitter",
-    "ElasticNetFitter",
-    "IterativeRefinementFitter",
+    "__version__",
 ]
