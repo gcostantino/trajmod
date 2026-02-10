@@ -3,12 +3,12 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gnss-trajectory-modeling"
+name = "trajmod"
 version = "0.1.0"
-description = "Simple GNSS trajectory modeling with SSE and earthquake detection"
+description = "Simple GNSS trajectory modeling"
 authors = [{name = "Giuseppe Costantino"}]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 
 dependencies = [
@@ -17,7 +17,6 @@ dependencies = [
     "matplotlib>=3.3",
     "scikit-learn>=1.0",
     "pyproj>=3.0",
-    "statsmodels>=0.13",
 ]
 
 [project.optional-dependencies]
@@ -30,4 +29,4 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["gnss_trajectory_modeling"]
+packages = ["trajmod"]
