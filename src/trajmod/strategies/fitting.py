@@ -44,7 +44,7 @@ class LassoFitter(FittingStrategy):
         lasso = LassoCV(cv=self.cv, n_jobs=-1, positive=self.positive)
         lasso.fit(Gsub_scaled, y[mask])
 
-        coeffs = lasso.coef_ / scaler.scale_
+        coeffs = lasso.coef_ / np.where(scaler.scale_ > 1e-10, scaler.scale_, 1.0)
         fitted = G @ coeffs
         return {'coeffs': coeffs, 'residuals': y - fitted, 'fitted': fitted,
                 'selected_mask': np.abs(coeffs) > 1e-8, 'alpha': lasso.alpha_,
@@ -64,7 +64,7 @@ class ElasticNetFitter(FittingStrategy):
         enet = ElasticNetCV(cv=self.cv, l1_ratio=self.l1_ratio, n_jobs=-1)
         enet.fit(Gsub_scaled, y[mask])
 
-        coeffs = enet.coef_ / scaler.scale_
+        coeffs = enet.coef_ / np.where(scaler.scale_ > 1e-10, scaler.scale_, 1.0)
         return {'coeffs': coeffs, 'residuals': y - G @ coeffs, 'fitted': G @ coeffs, 'alpha': enet.alpha_}
 
 
