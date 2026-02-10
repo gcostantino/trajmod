@@ -100,7 +100,7 @@ class TrajectoryModel:
         self.template_names = names
         return self.G'''
 
-    def _should_consider_postseismic(self, eq: Dict) -> bool:
+    '''def _should_consider_postseismic(self, eq: Dict) -> bool:
         """Determine if an earthquake should be considered for postseismic decay.
 
         Logic:
@@ -110,7 +110,37 @@ class TrajectoryModel:
         if self.config.d_param is None:
             return True
         else:
-            return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold
+            return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold'''
+
+    def _should_consider_postseismic(self, eq: Dict) -> bool:
+        """Determine if an event should be considered for postseismic decay.
+
+        Logic:
+        1. Antenna changes and similar events NEVER get postseismic
+        2. If d_param is None: Consider ALL earthquakes (catalog is pre-filtered)
+        3. If d_param is set: Only consider EQs >= postseismic_mag_threshold
+
+        Args:
+            eq: Event dictionary with optional 'event_type' and 'magnitude'
+        """
+        # case 1: Check event type - antenna changes never get postseismic
+        event_type = eq.get('event_type', 'earthquake')  # Default: earthquake
+
+        if event_type in ['antenna_change', 'equipment_change', 'monument_change']:
+            logger.debug(f"  Event {event_type} --> no postseismic")
+            return False
+
+        # case 2: Magnitude filtering (only for earthquakes)
+        if event_type == 'earthquake':
+            if self.config.d_param is None:
+                # Catalog pre-filtered spatially
+                return True
+            else:
+                return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold
+
+        # Unknown event type - default to no postseismic (safe)
+        logger.warning(f"  Unknown event_type '{event_type}' → no postseismic")
+        return False
 
     def _get_eq_step_index(self, eq_idx: int, n_baseline_cols: int) -> int:
         """Get the column index for a specific EQ step in the design matrix.
@@ -412,10 +442,15 @@ class TrajectoryModel:
 
         for i, eq in enumerate(self.selected_eq):
             eq_mag = eq.get('magnitude', 0)
+            event_type = eq.get('event_type', 'earthquake')
 
             # Tier 1: Magnitude filter
             if not self._should_consider_postseismic(eq):
-                logger.debug(f"  EQ {i} (M{eq_mag:.1f}): below magnitude threshold → SKIPPED")
+                # ← REPLACE logger.debug line with these 4 lines:
+                if event_type != 'earthquake':
+                    logger.info(f"  EQ {i} ({event_type}): event type excludes postseismic → SKIPPED")
+                else:
+                    logger.debug(f"  EQ {i} (M{eq_mag:.1f}): below magnitude threshold → SKIPPED")
                 continue
 
             # Tier 2: Step amplitude filter
@@ -940,9 +975,35 @@ class TrajectoryModel:
         return self.results
 
     def predict(self, t_pred: np.ndarray) -> np.ndarray:
-        """Predict at new time points."""
+        """Predict at new time points.
+
+        Args:
+            t_pred: Prediction times (datetime array)
+
+        Returns:
+            Predicted values
+
+        Raises:
+            ValueError: If model not fitted or times invalid
+        """
         if self.results is None:
             raise ValueError("Model must be fit before prediction")
+
+        # Validate prediction times
+        t_pred = np.asarray(t_pred, dtype='datetime64')
+        if len(t_pred) == 0:
+            raise ValueError("t_pred cannot be empty")
+
+        # Warn if extrapolating far beyond data range
+        t_min, t_max = self.t.min(), self.t.max()
+        if t_pred.min() < t_min or t_pred.max() > t_max:
+            import warnings
+            warnings.warn(
+                f"Prediction times [{t_pred.min()}, {t_pred.max()}] "
+                f"outside training range [{t_min}, {t_max}]. "
+                f"Extrapolation may be unreliable.",
+                UserWarning
+            )
 
         # Build design matrix for prediction times
         t_days_pred = (t_pred - self.t0).astype('timedelta64[D]').astype(float)
