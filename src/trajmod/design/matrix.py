@@ -59,12 +59,19 @@ class DesignMatrixBuilder:
         columns.append(self.templates.seasonal_cos(365.25 / 2))
         self.template_names.append('semiannual_cos')
 
-        if self.config.use_envelope_basis:
+        '''if self.config.use_envelope_basis:
             for T in self.config.envelope_periods:
                 columns.append(self.templates.seasonal_sin(T))
                 self.template_names.append(f'envelope_sin_{int(T / 365.25)}yr')
                 columns.append(self.templates.seasonal_cos(T))
-                self.template_names.append(f'envelope_cos_{int(T / 365.25)}yr')
+                self.template_names.append(f'envelope_cos_{int(T / 365.25)}yr')'''
+
+        if self.config.use_envelope_basis:
+            for T in self.config.envelope_periods:
+                columns.append(self.templates.seasonal_sin(T))
+                self.template_names.append(f'envelope_sin_{int(T)}d')
+                columns.append(self.templates.seasonal_cos(T))
+                self.template_names.append(f'envelope_cos_{int(T)}d')
 
         return columns
 
@@ -82,17 +89,11 @@ class DesignMatrixBuilder:
         columns = []
         for i, eq in enumerate(selected_eq):
             eq_date = eq['eq_day']
-            eq_mag = eq.get('magnitude', 0)
 
             step = self.templates.step(eq_date)
             columns.append(step)
             eq_str = eq_date.strftime('%Y-%m-%d')
             self.template_names.append(f'EQ_{i}_{eq_str}_step')
 
-            if eq_mag >= self.config.postseismic_mag_threshold:
-                for tau in self.config.tau_grid:
-                    log_dec = self.templates.log_decay(eq_date, tau)
-                    columns.append(log_dec)
-                    self.template_names.append(f'EQ_{i}_{eq_str}_log_tau{tau}')
-
         return columns
+
