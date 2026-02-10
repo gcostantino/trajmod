@@ -4,16 +4,16 @@ from typing import List, Dict, Optional, Tuple
 
 import numpy as np
 
-from src.trajmod.config.modelconfig import ModelConfig
-from src.trajmod.design.matrix import DesignMatrixBuilder
-from src.trajmod.events.event_selection import EventSelector
-from src.trajmod.events.events import EventCatalog
-from src.trajmod.model.results import ModelResults
-from src.trajmod.preprocessing.geodetic_utils import GeodesicCalculator
-from src.trajmod.preprocessing.preprocessing import TimeSeriesPreprocessor
-from src.trajmod.preprocessing.time_utils import DecimalYearConverter
-from src.trajmod.strategies.fitting import FittingStrategy, OLSFitter
-from src.trajmod.templates.templates import TemplateFunctions
+from trajmod.config.modelconfig import ModelConfig
+from trajmod.design.matrix import DesignMatrixBuilder
+from trajmod.events.event_selection import EventSelector
+from trajmod.events.events import EventCatalog
+from trajmod.model.results import ModelResults
+from trajmod.preprocessing.geodetic_utils import GeodesicCalculator
+from trajmod.preprocessing.preprocessing import TimeSeriesPreprocessor
+from trajmod.preprocessing.time_utils import DecimalYearConverter
+from trajmod.strategies.fitting import FittingStrategy, OLSFitter
+from trajmod.templates.templates import TemplateFunctions
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

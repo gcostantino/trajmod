@@ -206,7 +206,7 @@ class KneeEventSelector(EventSelector):
                           Events selected by knee but with |amplitude| < min_amplitude
                           will be filtered out.
         """
-        from src.trajmod.model.model_selection import NestedModelSelector
+        from trajmod.model.model_selection import NestedModelSelector
         self.selector = NestedModelSelector(criterion=criterion)
         self.method = method
         self.smooth_curve = smooth_curve
@@ -268,7 +268,7 @@ class KneeEventSelector(EventSelector):
             result['bic_path'] = self._smooth_curve(result['bic_path'], self.smooth_window)
 
             # Re-run knee detection on smoothed curves
-            from src.trajmod.model.model_selection import ModelSelector
+            from trajmod.model.model_selection import ModelSelector
             if self.method == 'min':
                 if self.selector.criterion == 'ssr':
                     k_opt = int(np.argmin(result['ssr_path']))

@@ -3,8 +3,8 @@ import numpy as np
 from typing import List, Dict, Tuple
 import logging
 
-from src.trajmod.config.modelconfig import ModelConfig
-from src.trajmod.templates.templates import TemplateFunctions
+from trajmod.config.modelconfig import ModelConfig
+from trajmod.templates.templates import TemplateFunctions
 
 logger = logging.getLogger(__name__)
 
