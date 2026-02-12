@@ -69,7 +69,7 @@ class AmplitudeThresholdSelector(EventSelector):
             threshold_value = self.threshold * data_rms
         else:  # snr
             # Estimate noise level using MAD
-            from src.trajmod.model.model_selection import ModelSelector
+            from trajmod.model.model_selection import ModelSelector
             # Compute residuals from full fit
             fitted = G_full @ coeffs_full
             residuals = y - fitted
