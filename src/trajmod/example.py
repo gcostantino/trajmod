@@ -30,15 +30,18 @@ selected = model.select_events(selector, event_type='sse', plot=True)
 
 
 """
-from src.trajmod.events.amplitude_threshold_selector import AmplitudeThresholdSelector
-from src.trajmod.model.model import TrajectoryModel, ModelConfig
-from src.trajmod.events.event_selection import KneeEventSelector, LassoEventSelector, CompositeEventSelector
-from src.trajmod.visualization import TrajectoryVisualizer
+import matplotlib.pyplot as plt
+
+from trajmod.events import CatalogFetcher
+from trajmod.events.amplitude_threshold_selector import AmplitudeThresholdSelector
+from trajmod.model.model import TrajectoryModel, ModelConfig
+from trajmod.events.event_selection import KneeEventSelector, LassoEventSelector, CompositeEventSelector
+from trajmod.visualization import TrajectoryVisualizer
 import numpy as np
 import datetime
 
 
-def build_japan_catalogue_from_nied():
+def build_japan_catalogue_from_nied(min_time=None, max_time=None):
     eq_list = []
     cat_dates = np.loadtxt(f'/Users/giuseppe/Documents/DATA/SEISMIC_CATALOGS/JAPAN/cat_nied_small.txt',
                            skiprows=1, usecols=(0,), delimiter=" ", dtype=str)
@@ -47,10 +50,9 @@ def build_japan_catalogue_from_nied():
 
     for i in range(len(cat_dates)):
         year, month, day = cat_dates[i].split(',')[0].split('/')
-        if int(year) < 2000:
-            continue
-        if int(year) > 2005:
-            continue
+        if min_time is not None and max_time is not None:
+            if int(year) < min_time or int(year) > max_time:
+                continue
         dtime = datetime.datetime(int(year), int(month), int(day))
         eq_list.append({'lat': eq_data[i][0], 'lon': eq_data[i][1], 'date': dtime, 'magnitude': eq_data[i][2]})
 
@@ -78,14 +80,14 @@ def ymd_decimal_year_lookup(from_decimal=False):
 if __name__ == '__main__':
     # Configure
     config = ModelConfig(
-        d_param=None,
+        d_param=.8,
         include_seasonal=True,
         postseismic_mag_threshold=6.5
     )
 
     station_code = 'J214'
     station_coordinates = np.array([36.800, 140.754])  # lat lon
-    min_time, max_time = 2000, 2005
+    min_time, max_time = 2000, 2025
 
     date_lookup = ymd_decimal_year_lookup(from_decimal=False)
     lookup_decimal = ymd_decimal_year_lookup(from_decimal=True)
@@ -105,10 +107,7 @@ if __name__ == '__main__':
     '''plt.plot(time, ts)
     plt.show()'''
 
-    station_lat, station_lon = station_coordinates[0], station_coordinates[1]
-
-    eq_catalogue = build_japan_catalogue_from_nied()
-    print('# events in the EQ catalogue', len(eq_catalogue))
+    station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
 
     time_filter = np.logical_and(time >= min_time, time < max_time)
     time = time[time_filter]
@@ -118,8 +117,22 @@ if __name__ == '__main__':
 
     ts = ts * 1000  # mm
 
-    eq_catalogue = build_japan_catalogue_from_nied()
-    print('# events in the EQ catalogue', len(eq_catalogue))
+    #eq_catalogue = build_japan_catalogue_from_nied()
+    #print('# events in the EQ catalogue', len(eq_catalogue))
+    fetcher = CatalogFetcher()
+    '''eq_catalogue = fetcher.fetch_usgs_box(
+        minlat=30.0, maxlat=45.0,
+        minlon=130.0, maxlon=145.0,
+        start_date="2020-01-01", end_date="2023-12-31",
+        min_magnitude=5.0
+    )'''
+
+    eq_catalogue = fetcher.fetch_usgs(  # radius
+        lat=station_lat, lon=station_lon,
+        radius_km=1000.0,
+        start_date="2000-01-01", end_date="2025-12-31",
+        min_magnitude=6.0
+    )
 
     sse_events = None
 
@@ -160,7 +173,7 @@ if __name__ == '__main__':
     #selector = CompositeEventSelector([knee], mode='intersection')
 
     selector = AmplitudeThresholdSelector(
-        threshold=1.0,  # mm
+        threshold=2,  # mm
         mode='absolute'
     )
 
