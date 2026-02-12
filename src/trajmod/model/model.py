@@ -31,7 +31,8 @@ class TrajectoryModel:
                  sse_catalog: Optional[List[Dict]] = None,
                  eq_catalog: Optional[List[Dict]] = None,
                  config: Optional[ModelConfig] = None,
-                 time_converter: Optional[DecimalYearConverter] = None):
+                 time_converter: Optional[DecimalYearConverter] = None,
+                 validate_catalogs: bool = True, ):
         """Initialize trajectory model.
 
         Args:
@@ -44,6 +45,7 @@ class TrajectoryModel:
             eq_catalog: List of earthquake event dicts
             config: Model configuration
             time_converter: Optional time converter
+            validate_catalogs: Optional flag to validate sse_catalog and eq_catalog
         """
         # Configuration
         self.config = config or ModelConfig()
@@ -66,6 +68,10 @@ class TrajectoryModel:
         # Store catalogs
         self.sse_catalog = sse_catalog or []
         self.eq_catalog = eq_catalog or []
+
+        # validate catalogues
+        if validate_catalogs:
+            self._validate_catalogs()  # Auto-validate!
 
         # Select relevant events
         self.selected_sse = self._select_sse_events()
@@ -112,16 +118,126 @@ class TrajectoryModel:
         else:
             return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold'''
 
+    def _validate_catalogs(self) -> None:
+        """Validate input catalogs and attempt to fix common issues.
+
+        This method:
+        1. Validates earthquake and SSE catalogs
+        2. Attempts to auto-fix common issues (strings, wrong field names, etc.)
+        3. Updates self.eq_catalog and self.sse_catalog with fixed versions
+        4. Raises ValueError if catalogs are invalid and cannot be fixed
+        5. Logs warnings for fixed issues
+
+        Raises:
+            ValueError: If catalogs are invalid and cannot be auto-fixed
+        """
+        from trajmod.events import (
+            validate_earthquake_catalog,
+            validate_sse_catalog
+        )
+
+        # Validate earthquake catalog
+        if self.eq_catalog:
+            logger.debug(f"Validating earthquake catalog ({len(self.eq_catalog)} events)...")
+
+            is_valid, messages, fixed = validate_earthquake_catalog(
+                self.eq_catalog,
+                strict=False,  # More lenient (allow fixable issues)
+                fix=True  # Attempt to fix issues
+            )
+
+            if not is_valid:
+                if fixed:
+                    # Auto-fixed successfully
+                    logger.warning(
+                        f"Auto-fixed {len(messages)} issue(s) in earthquake catalog:"
+                    )
+                    for msg in messages[:5]:  # Show first 5
+                        logger.warning(f"  - {msg}")
+                    if len(messages) > 5:
+                        logger.warning(f"  ... and {len(messages) - 5} more")
+
+                    self.eq_catalog = fixed
+                    logger.info(f"Earthquake catalog validated ({len(fixed)} events)")
+                else:
+                    # Cannot fix - raise error
+                    error_summary = "\n".join(f"  - {msg}" for msg in messages[:10])
+                    raise ValueError(
+                        f"Invalid earthquake catalog ({len(messages)} errors):\n"
+                        f"{error_summary}\n"
+                        f"Please fix these issues or consult the catalog format guidelines."
+                    )
+            else:
+                # Valid (possibly with warnings)
+                if messages:
+                    logger.info(f"Earthquake catalog valid with {len(messages)} warning(s)")
+                    for msg in messages[:3]:
+                        logger.debug(f"  {msg}")
+                else:
+                    logger.debug(f"Earthquake catalog validated ({len(self.eq_catalog)} events)")
+
+        # Validate SSE catalog
+        if self.sse_catalog:
+            logger.debug(f"Validating SSE catalog ({len(self.sse_catalog)} events)...")
+
+            is_valid, messages, fixed = validate_sse_catalog(
+                self.sse_catalog,
+                strict=False,
+                fix=True
+            )
+
+            if not is_valid:
+                if fixed:
+                    # Auto-fixed successfully
+                    logger.warning(
+                        f"Auto-fixed {len(messages)} issue(s) in SSE catalog:"
+                    )
+                    for msg in messages[:5]:
+                        logger.warning(f"  - {msg}")
+                    if len(messages) > 5:
+                        logger.warning(f"  ... and {len(messages) - 5} more")
+
+                    self.sse_catalog = fixed
+                    logger.info(f"✓ SSE catalog validated ({len(fixed)} events)")
+                else:
+                    # Cannot fix - raise error
+                    error_summary = "\n".join(f"  - {msg}" for msg in messages[:10])
+                    raise ValueError(
+                        f"Invalid SSE catalog ({len(messages)} errors):\n"
+                        f"{error_summary}\n"
+                        f"Please fix these issues or consult the catalog format guidelines."
+                    )
+            else:
+                # Valid (possibly with warnings)
+                if messages:
+                    logger.info(f"SSE catalog valid with {len(messages)} warning(s)")
+                    for msg in messages[:3]:
+                        logger.debug(f"  {msg}")
+                else:
+                    logger.debug(f"SSE catalog validated ({len(self.sse_catalog)} events)")
+
     def _should_consider_postseismic(self, eq: Dict) -> bool:
-        """Determine if an event should be considered for postseismic decay.
+        """Determine if earthquake should be considered for postseismic decay.
 
-        Logic:
-        1. Antenna changes and similar events NEVER get postseismic
-        2. If d_param is None: Consider ALL earthquakes (catalog is pre-filtered)
-        3. If d_param is set: Only consider EQs >= postseismic_mag_threshold
+        Filtering strategy:
 
-        Args:
-            eq: Event dictionary with optional 'event_type' and 'magnitude'
+        1. Event type check (non-earthquakes never get postseismic)
+
+        2. Magnitude threshold (ONLY if d_param is set):
+           - When d_param=None: User has pre-filtered catalog spatially.
+             Let amplitude filter + statistical test decide.
+           - When d_param is set: Apply magnitude threshold (M >= 6.5)
+             as additional safety, since spatial filtering is automatic.
+
+        3. Step amplitude filter (ALWAYS applied):
+           - Ensures coseismic step is detectable (>= 5mm default)
+           - This automatically filters out distant events
+
+        4. Statistical test (ALWAYS applied):
+           - AIC/BIC/F-test determines if postseismic improves fit
+
+        Returns:
+            bool: True if earthquake passes initial filters for postseismic
         """
         # case 1: Check event type - antenna changes never get postseismic
         event_type = eq.get('event_type', 'earthquake')  # Default: earthquake
@@ -530,6 +646,12 @@ class TrajectoryModel:
             evc['start_day'] = ev['start']
             evc['end_day'] = ev['end']
 
+            # Keep SSE if it overlaps with time series at all (conservative)
+            if evc['end_day'] < self.t.min() or evc['start_day'] > self.t.max():
+                logger.debug(f"Skipping SSE outside time range: "
+                             f"{evc['start_day']} to {evc['end_day']}")
+                continue
+
             if self.config.d_param is None:
                 # Include all events
                 selected.append(evc)
@@ -557,6 +679,10 @@ class TrajectoryModel:
             # skip events without date/time
             if evc['eq_day'] is None:
                 logger.warning(f"Skipping earthquake without date/time: {ev}")
+                continue
+
+            if evc['eq_day'] < self.t.min() or evc['eq_day'] > self.t.max():
+                logger.debug(f"Skipping earthquake outside time range: {evc['eq_day']}")
                 continue
 
             if self.config.d_param is not None:
