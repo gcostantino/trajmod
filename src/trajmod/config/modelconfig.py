@@ -39,7 +39,7 @@ class ModelConfig:
 
 
     merge_close_sse: bool = False
-    merge_earthquakes_same_day: bool = False
+    merge_earthquakes_same_day: bool = True
     acceleration_term: bool = True
 
     # envelope periods (60-365 days, not 1-6 years!)
