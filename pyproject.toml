@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trajmod"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Simple GNSS trajectory modeling"
 authors = [{name = "Giuseppe Costantino"}]
 readme = "README.md"
