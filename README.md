@@ -3,7 +3,7 @@
 </p>
 
 ---
-**Simple GNSS time series Trajectory Modeling.**
+**Simple GNSS time series Trajectory Modeling**
 
 [![PyPI version](https://img.shields.io/pypi/v/trajmod)](https://pypi.org/project/trajmod/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,8 +14,8 @@
 A Python library for modeling GNSS position time series with support for:
 - Secular trends, acceleration and seasonal components
 - Slow Slip Events (SSE) with raised-cosine templates
-- Earthquake co-seismic offsets and postseismic relaxation
-- **Advanced multi-tier postseismic filtering** (magnitude, amplitude, sign consistency, statistical tests)
+- Earthquake co-seismic offsets and post-seismic relaxation
+- **Advanced separable non-linear post-seismic fitting** (amplitude, relaxation time)
 - Event-type support (earthquakes vs. antenna changes)
 
 ---
@@ -56,6 +56,7 @@ pip install trajmod
 - matplotlib ≥ 3.3
 - scikit-learn ≥ 1.0
 - pyproj ≥ 3.0
+- requests ≥ 2.25
 
 ---
 
@@ -66,6 +67,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from trajmod.model import TrajectoryModel
 from trajmod.config import ModelConfig
+from trajmod.events import CatalogFetcher
 
 # Generate synthetic data
 t0 = datetime(2020, 1, 1)
@@ -73,7 +75,7 @@ times = np.array([t0 + timedelta(days=i) for i in range(365)])
 data = np.random.randn(365) * 2.0  # 2mm noise
 errors = np.ones(365) * 2.0
 
-# Define earthquake catalog
+# Define earthquake catalog...
 eq_catalog = [
     {
         'date': datetime(2020, 3, 15),
@@ -86,6 +88,14 @@ eq_catalog = [
         'event_type': 'antenna_change'  # No postseismic for equipment changes
     }
 ]
+
+# ... or fetch it automatically (e.g., from USGS)
+fetcher = CatalogFetcher()
+eq_catalog = fetcher.fetch_usgs(
+    lat=40.0, lon=-120.0, radius_km=500,
+    start_date="2020-01-01", end_date="2020-12-31",
+    min_magnitude=5.0
+)
 
 # Configure model with multi-tier postseismic filtering
 config = ModelConfig(
@@ -128,6 +138,42 @@ print(f"Standard errors: {results.uncertainty['standard_errors']}")
 future_times = np.array([t0 + timedelta(days=i) for i in range(365, 730)])
 predictions = model.predict(future_times)
 ```
+
+
+---
+
+## Earthquake Catalogs
+
+### Quick: Fetch from USGS
+
+```python
+from trajmod.events import CatalogFetcher
+
+fetcher = CatalogFetcher()
+eq_catalog = fetcher.fetch_usgs(
+    lat=40.0, lon=-120.0, radius_km=500,
+    start_date="2020-01-01", end_date="2023-12-31",
+    min_magnitude=5.0
+)
+```
+
+### Manual: Provide Your Own
+
+```python
+eq_catalog = [
+    {
+        'time': datetime(2020, 3, 15),  # datetime object, not string!
+        'lat': 40.0,
+        'lon': -120.0,
+        'magnitude': 7.2
+    }
+]
+
+```
+Catalogs are **automatically validated** on model creation with ```TrajectoryModel(..., validate_catalogs=True)```.
+Common issues (string dates, wrong field names) are auto-fixed with warnings.
+
+See [**Catalog Format Guidelines**](CATALOG_FORMAT_GUIDELINES.md) for full specifications.
 
 ---
 
@@ -336,10 +382,12 @@ Contributions are welcome! Please:
 
 ## Acknowledgments
 
-This package implements trajectory modeling techniques commonly used in GNSS geodesy, with particular focus on:
-- Multi-tier postseismic filtering to prevent overfitting
-- Event-type discrimination for equipment changes
-- Automated model selection with information criteria
+Parts of this codebase were developed with assistance from Claude (Anthropic AI).
+
+This package implements a separable non-linear trajectory modeling technique, with particular focus on
+automated model selection with information criteria and event filtering to prevent overfitting.
+
+This software is inspired by Bevis & Brown, (2014), Blewitt et al. (2016) and Marill et al. (2021).
 
 ---
 
