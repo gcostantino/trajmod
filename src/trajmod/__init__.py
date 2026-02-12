@@ -4,7 +4,7 @@ A Python library for modeling GNSS displacement time series with support for
 earthquakes, slow slip events, and advanced multi-tier postseismic filtering.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Giuseppe Costantino"
 __license__ = "MIT"
 
