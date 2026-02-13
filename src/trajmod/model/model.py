@@ -32,7 +32,7 @@ class TrajectoryModel:
                  eq_catalog: Optional[List[Dict]] = None,
                  config: Optional[ModelConfig] = None,
                  time_converter: Optional[DecimalYearConverter] = None,
-                 validate_catalogs: bool = True, ):
+                 validate_catalogs: bool = True,):
         """Initialize trajectory model.
 
         Args:
