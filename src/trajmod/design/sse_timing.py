@@ -154,7 +154,7 @@ def optimize_sse_timing(t_days: np.ndarray,
     chi2_catalog = _full_chi2(Ao, yw, tm, wm, s0, e0)
 
     n_passes = 0
-    for p in range(config.sse_timing_max_passes):
+    for p in range(config.sse_timing_max_rounds):
         n_passes = p + 1
         moved = False
 
