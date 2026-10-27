@@ -1,12 +1,12 @@
 """Main TrajectoryModel class - orchestrates all components."""
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from trajmod.config.modelconfig import ModelConfig
 from trajmod.design.matrix import DesignMatrixBuilder
-from trajmod.events.event_selection import EventSelector
+from trajmod.events.event_selection import EventSelector, KneeEventSelector
 from trajmod.events.events import EventCatalog
 from trajmod.model.results import ModelResults
 from trajmod.preprocessing.geodetic_utils import GeodesicCalculator
@@ -17,6 +17,8 @@ from trajmod.templates.templates import TemplateFunctions
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+_NON_EQ_TYPES = ('antenna_change', 'equipment_change', 'monument_change')
 
 
 class TrajectoryModel:
@@ -32,7 +34,7 @@ class TrajectoryModel:
                  eq_catalog: Optional[List[Dict]] = None,
                  config: Optional[ModelConfig] = None,
                  time_converter: Optional[DecimalYearConverter] = None,
-                 validate_catalogs: bool = True,):
+                 validate_catalogs: bool = True):
         """Initialize trajectory model.
 
         Args:
@@ -47,37 +49,32 @@ class TrajectoryModel:
             time_converter: Optional time converter
             validate_catalogs: Optional flag to validate sse_catalog and eq_catalog
         """
-        # Configuration
         self.config = config or ModelConfig()
         self.time_converter = time_converter or DecimalYearConverter.from_algorithm()
 
-        # Validate inputs
         preprocessor = TimeSeriesPreprocessor(self.time_converter)
         preprocessor.validate_data(t, y, sigma_y, station_lat, station_lon)
 
-        # Store station info
         self.station_lat = station_lat
         self.station_lon = station_lon
         self.geocalc = GeodesicCalculator()
 
-        # Preprocess data (fill gaps)
         self.t, self.y, self.uncertainties, self.t_decyr = preprocessor.fill_gaps(t, y, sigma_y)
         self.t0 = self.t[0]
         self.t_days = (self.t - self.t0).astype('timedelta64[D]').astype(float)
 
-        # Store catalogs
         self.sse_catalog = sse_catalog or []
         self.eq_catalog = eq_catalog or []
 
-        # validate catalogues
         if validate_catalogs:
-            self._validate_catalogs()  # Auto-validate!
+            self._validate_catalogs()
 
-        # Select relevant events
         self.selected_sse = self._select_sse_events()
         self.selected_eq = self._select_eq_events()
 
-        # Placeholders
+        # Accepted postseismic terms: [{'eq_idx', 'eq_day', 'tau', 'coeff_step', 'coeff_post'}]
+        self.post_specs: List[Dict] = []
+
         self.G: Optional[np.ndarray] = None
         self.template_names: Optional[List[str]] = None
         self.results: Optional[ModelResults] = None
@@ -85,90 +82,41 @@ class TrajectoryModel:
         logger.info(f"Initialized model: {len(self.t)} time points, "
                     f"{len(self.selected_sse)} SSEs, {len(self.selected_eq)} EQs")
 
-    '''def build_design_matrix(self) -> np.ndarray:
-        """Build design matrix G."""
-        templates = TemplateFunctions(self.t_days, self.t0)
-        builder = DesignMatrixBuilder(templates, self.config)
-
-        self.G, self.template_names = builder.build(self.selected_sse, self.selected_eq)
-        return self.G'''
-
-    '''def build_design_matrix(self) -> np.ndarray:
-        templates = TemplateFunctions(self.t_days, self.t0)
-        builder = DesignMatrixBuilder(templates, self.config)
-        G, names = builder.build(self.selected_sse, self.selected_eq)
-
-        # Postprocess postseismic τ if requested
-        if self.config.fit_best_postseismic_tau:
-            G, names = self._select_best_postseismic_per_eq(G, names)
-
-        self.G = G
-        self.template_names = names
-        return self.G'''
-
-    '''def _should_consider_postseismic(self, eq: Dict) -> bool:
-        """Determine if an earthquake should be considered for postseismic decay.
-
-        Logic:
-        - If d_param is None: Consider ALL earthquakes (catalog is pre-filtered)
-        - If d_param is set: Only consider EQs >= postseismic_mag_threshold
-        """
-        if self.config.d_param is None:
-            return True
-        else:
-            return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold'''
-
+    # ------------------------------------------------------------------ #
+    # Catalog validation
+    # ------------------------------------------------------------------ #
     def _validate_catalogs(self) -> None:
         """Validate input catalogs and attempt to fix common issues.
-
-        This method:
-        1. Validates earthquake and SSE catalogs
-        2. Attempts to auto-fix common issues (strings, wrong field names, etc.)
-        3. Updates self.eq_catalog and self.sse_catalog with fixed versions
-        4. Raises ValueError if catalogs are invalid and cannot be fixed
-        5. Logs warnings for fixed issues
 
         Raises:
             ValueError: If catalogs are invalid and cannot be auto-fixed
         """
         from trajmod.events import (
             validate_earthquake_catalog,
-            validate_sse_catalog
+            validate_sse_catalog,
         )
 
-        # Validate earthquake catalog
         if self.eq_catalog:
             logger.debug(f"Validating earthquake catalog ({len(self.eq_catalog)} events)...")
-
             is_valid, messages, fixed = validate_earthquake_catalog(
-                self.eq_catalog,
-                strict=False,  # More lenient (allow fixable issues)
-                fix=True  # Attempt to fix issues
-            )
+                self.eq_catalog, strict=False, fix=True)
 
             if not is_valid:
                 if fixed:
-                    # Auto-fixed successfully
-                    logger.warning(
-                        f"Auto-fixed {len(messages)} issue(s) in earthquake catalog:"
-                    )
-                    for msg in messages[:5]:  # Show first 5
+                    logger.warning(f"Auto-fixed {len(messages)} issue(s) in earthquake catalog:")
+                    for msg in messages[:5]:
                         logger.warning(f"  - {msg}")
                     if len(messages) > 5:
                         logger.warning(f"  ... and {len(messages) - 5} more")
-
                     self.eq_catalog = fixed
                     logger.info(f"Earthquake catalog validated ({len(fixed)} events)")
                 else:
-                    # Cannot fix - raise error
                     error_summary = "\n".join(f"  - {msg}" for msg in messages[:10])
                     raise ValueError(
                         f"Invalid earthquake catalog ({len(messages)} errors):\n"
                         f"{error_summary}\n"
-                        f"Please fix these issues or consult the catalog format guidelines."
-                    )
+                        f"Please fix these issues or consult the catalog format guidelines.")
             else:
-                # Valid (possibly with warnings)
                 if messages:
                     logger.info(f"Earthquake catalog valid with {len(messages)} warning(s)")
                     for msg in messages[:3]:
@@ -176,39 +124,27 @@ class TrajectoryModel:
                 else:
                     logger.debug(f"Earthquake catalog validated ({len(self.eq_catalog)} events)")
 
-        # Validate SSE catalog
         if self.sse_catalog:
             logger.debug(f"Validating SSE catalog ({len(self.sse_catalog)} events)...")
-
             is_valid, messages, fixed = validate_sse_catalog(
-                self.sse_catalog,
-                strict=False,
-                fix=True
-            )
+                self.sse_catalog, strict=False, fix=True)
 
             if not is_valid:
                 if fixed:
-                    # Auto-fixed successfully
-                    logger.warning(
-                        f"Auto-fixed {len(messages)} issue(s) in SSE catalog:"
-                    )
+                    logger.warning(f"Auto-fixed {len(messages)} issue(s) in SSE catalog:")
                     for msg in messages[:5]:
                         logger.warning(f"  - {msg}")
                     if len(messages) > 5:
                         logger.warning(f"  ... and {len(messages) - 5} more")
-
                     self.sse_catalog = fixed
-                    logger.info(f"✓ SSE catalog validated ({len(fixed)} events)")
+                    logger.info(f"SSE catalog validated ({len(fixed)} events)")
                 else:
-                    # Cannot fix - raise error
                     error_summary = "\n".join(f"  - {msg}" for msg in messages[:10])
                     raise ValueError(
                         f"Invalid SSE catalog ({len(messages)} errors):\n"
                         f"{error_summary}\n"
-                        f"Please fix these issues or consult the catalog format guidelines."
-                    )
+                        f"Please fix these issues or consult the catalog format guidelines.")
             else:
-                # Valid (possibly with warnings)
                 if messages:
                     logger.info(f"SSE catalog valid with {len(messages)} warning(s)")
                     for msg in messages[:3]:
@@ -216,278 +152,281 @@ class TrajectoryModel:
                 else:
                     logger.debug(f"SSE catalog validated ({len(self.sse_catalog)} events)")
 
+    # ------------------------------------------------------------------ #
+    # Weighted statistics helpers
+    # ------------------------------------------------------------------ #
+    def _default_weights(self) -> np.ndarray:
+        """Weights w = 1/sigma, zero where not finite."""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            w = 1.0 / np.asarray(self.uncertainties, dtype=float)
+        w = np.array(w, dtype=float)
+        w[~np.isfinite(w)] = 0.0
+        return w
+
+    def _prepare_weights(self, weights: Optional[np.ndarray]) -> np.ndarray:
+        """Return a clean copy of the weights (never mutates the caller's array)."""
+        if weights is None:
+            return self._default_weights()
+        w = np.array(weights, dtype=float)
+        w[~np.isfinite(w)] = 0.0
+        return w
+
+    def _valid_obs_mask(self, weights: np.ndarray) -> np.ndarray:
+        """Observations that contribute to the fit: finite y and positive weight."""
+        return np.isfinite(self.y) & np.isfinite(weights) & (weights > 0)
+
+    @staticmethod
+    def _chi2(residuals: np.ndarray, weights: np.ndarray) -> float:
+        """Weighted sum of squares: sum (w_i * r_i)^2 over contributing observations.
+
+        OLSFitter returns unweighted residuals, so the weights are applied here.
+        """
+        mask = np.isfinite(residuals) & np.isfinite(weights) & (weights > 0)
+        wr = weights[mask] * residuals[mask]
+        return float(np.sum(wr ** 2))
+
+    def _fit_chi2(self,
+                  G: np.ndarray,
+                  weights: np.ndarray,
+                  fitter: FittingStrategy) -> Optional[Tuple[float, np.ndarray]]:
+        """Fit and return (chi2, coeffs); None if the fit fails."""
+        try:
+            res = fitter.fit(G, self.y, weights)
+        except (np.linalg.LinAlgError, ValueError) as e:
+            logger.debug(f"Fit failed: {e}")
+            return None
+        return self._chi2(res['residuals'], weights), res['coeffs']
+
+    def _n_params(self, n_cols: int, n_post: int) -> int:
+        """Effective parameter count used in the information criteria.
+
+        Each postseismic term counts as `postseismic_tau_penalty_params` parameters
+        (1 = amplitude only, 2 = amplitude + tau). n_cols is the total number of
+        columns, including the n_post postseismic ones.
+        """
+        pen = int(getattr(self.config, 'postseismic_tau_penalty_params', 1))
+        return n_cols - n_post + n_post * pen
+
+    def _compute_information_criterion(self,
+                                       chi2: float,
+                                       n_obs: int,
+                                       n_params: int,
+                                       criterion: str = 'aic') -> float:
+        """AIC/BIC from a weighted chi-square: n ln(chi2/n) + penalty."""
+        if n_obs <= n_params:
+            return np.inf
+
+        s2 = chi2 / n_obs
+        if criterion == 'aic':
+            return n_obs * np.log(max(1e-300, s2)) + 2 * n_params
+        elif criterion == 'bic':
+            return n_obs * np.log(max(1e-300, s2)) + n_params * np.log(n_obs)
+        else:
+            raise ValueError(f"Unknown criterion: {criterion}")
+
+    def _compute_ftest(self,
+                       chi2_reduced: float,
+                       chi2_full: float,
+                       n_obs: int,
+                       p_reduced: int,
+                       p_full: int) -> float:
+        """F-test p-value for nested models (weighted chi-square)."""
+        from scipy.stats import f as f_dist
+
+        df1 = p_full - p_reduced
+        df2 = n_obs - p_full
+        if chi2_full >= chi2_reduced or df1 <= 0 or df2 <= 0:
+            return 1.0
+
+        f_stat = ((chi2_reduced - chi2_full) / df1) / (chi2_full / df2)
+        return float(1.0 - f_dist.cdf(f_stat, df1, df2))
+
+    # ------------------------------------------------------------------ #
+    # Postseismic selection
+    # ------------------------------------------------------------------ #
     def _should_consider_postseismic(self, eq: Dict) -> bool:
         """Determine if earthquake should be considered for postseismic decay.
 
         Filtering strategy:
-
-        1. Event type check (non-earthquakes never get postseismic)
-
-        2. Magnitude threshold (ONLY if d_param is set):
-           - When d_param=None: User has pre-filtered catalog spatially.
-             Let amplitude filter + statistical test decide.
-           - When d_param is set: Apply magnitude threshold (M >= 6.5)
-             as additional safety, since spatial filtering is automatic.
-
-        3. Step amplitude filter (ALWAYS applied):
-           - Ensures coseismic step is detectable (>= 5mm default)
-           - This automatically filters out distant events
-
-        4. Statistical test (ALWAYS applied):
-           - AIC/BIC/F-test determines if postseismic improves fit
-
-        Returns:
-            bool: True if earthquake passes initial filters for postseismic
+        1. Event type: non-earthquakes never get postseismic.
+        2. Magnitude threshold, ONLY if d_param is set (catalog pre-filtered otherwise).
+        3. Step amplitude filter (applied in build_design_matrix).
+        4. Statistical test (AIC/BIC/F-test, applied in build_design_matrix).
         """
-        # case 1: Check event type - antenna changes never get postseismic
-        event_type = eq.get('event_type', 'earthquake')  # Default: earthquake
+        event_type = eq.get('event_type', 'earthquake')
 
-        if event_type in ['antenna_change', 'equipment_change', 'monument_change']:
+        if event_type in _NON_EQ_TYPES:
             logger.debug(f"  Event {event_type} --> no postseismic")
             return False
 
-        # case 2: Magnitude filtering (only for earthquakes)
         if event_type == 'earthquake':
             if self.config.d_param is None:
-                # Catalog pre-filtered spatially
                 return True
-            else:
-                return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold
+            return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold
 
-        # Unknown event type - default to no postseismic (safe)
-        logger.warning(f"  Unknown event_type '{event_type}' → no postseismic")
+        logger.warning(f"  Unknown event_type '{event_type}' -> no postseismic")
         return False
 
-    def _get_eq_step_index(self, eq_idx: int, n_baseline_cols: int) -> int:
-        """Get the column index for a specific EQ step in the design matrix.
+    def _optimize_tau_for_eq(self,
+                             eq_day,
+                             G_baseline: np.ndarray,
+                             existing_post_columns: List[np.ndarray],
+                             weights: np.ndarray,
+                             builder: DesignMatrixBuilder,
+                             fitter: FittingStrategy,
+                             ref_sign: Optional[float] = None
+                             ) -> Tuple[Optional[float], float, Optional[np.ndarray], Optional[float]]:
+        """Find the tau minimising the weighted chi-square for one earthquake.
 
         Args:
-            eq_idx: Index of earthquake in selected_eq list
-            n_baseline_cols: Total number of baseline columns
+            existing_post_columns: postseismic columns of the OTHER accepted terms
+            ref_sign: if given, only taus whose amplitude has this sign are eligible
 
         Returns:
-            Column index for this EQ's step
+            (best_tau, best_chi2, best_template, best_coeff_post)
         """
-        # Baseline structure: offset, trend, [accel], seasonal, SSE, EQ steps
-        n_base = 2  # offset + trend
-        if self.config.acceleration_term:
-            n_base += 1
-
-        if self.config.include_seasonal:
-            n_base += 4  # annual_sin, annual_cos, semiannual_sin, semiannual_cos
-            if self.config.use_envelope_basis:
-                n_base += 2 * len(self.config.envelope_periods)
-
-        n_sse = len(self.selected_sse)
-
-        idx_step = n_base + n_sse + eq_idx
-        return idx_step
-
-    def _compute_information_criterion(
-            self,
-            ssr: float,
-            n_obs: int,
-            n_params: int,
-            criterion: str = 'aic'
-    ) -> float:
-        """Compute AIC or BIC for a model."""
-        if n_obs <= n_params:
-            return np.inf
-
-        sigma2 = ssr / n_obs
-
-        if criterion == 'aic':
-            return n_obs * np.log(max(1e-300, sigma2)) + 2 * n_params
-        elif criterion == 'bic':
-            return n_obs * np.log(max(1e-300, sigma2)) + n_params * np.log(n_obs)
-        else:
-            raise ValueError(f"Unknown criterion: {criterion}")
-
-    def _compute_ftest(
-            self,
-            ssr_reduced: float,
-            ssr_full: float,
-            n_obs: int,
-            p_reduced: int,
-            p_full: int
-    ) -> float:
-        """Compute F-test p-value for nested models."""
-        from scipy.stats import f as f_dist
-
-        if ssr_full >= ssr_reduced or n_obs <= p_full:
-            return 1.0
-
-        df1 = p_full - p_reduced
-        df2 = n_obs - p_full
-
-        f_stat = ((ssr_reduced - ssr_full) / df1) / (ssr_full / df2)
-        p_value = 1.0 - f_dist.cdf(f_stat, df1, df2)
-
-        return p_value
-
-    def _optimize_tau_for_eq(
-            self,
-            eq_idx: int,
-            eq_date,
-            G_baseline: np.ndarray,
-            existing_post_columns: List[np.ndarray],
-            method: Optional[FittingStrategy] = None
-    ) -> Tuple[Optional[int], Optional[float], Optional[np.ndarray]]:
-        """Find best τ for a single earthquake."""
-        from ..templates.templates import TemplateFunctions
-        from ..strategies.fitting import OLSFitter
-
-        fitter = method or OLSFitter()
-        weights = 1.0 / self.uncertainties
-        weights[~np.isfinite(weights)] = 0.0
-
-        templater = TemplateFunctions(self.t_days, self.t0)
-
         best_tau = None
-        best_ssr = np.inf
+        best_chi2 = np.inf
         best_template = None
+        best_coeff = None
+
+        base_part = (np.hstack([G_baseline, np.column_stack(existing_post_columns)])
+                     if existing_post_columns else G_baseline)
 
         for tau in self.config.tau_grid:
-            template = templater.log_decay(eq_date, tau)
+            template = builder.make_postseismic_column(eq_day, tau)
+            G_tmp = np.hstack([base_part, template[:, np.newaxis]])
 
-            if existing_post_columns:
-                G_tmp = np.hstack([
-                    G_baseline,
-                    np.column_stack(existing_post_columns + [template])
-                ])
-            else:
-                G_tmp = np.hstack([G_baseline, template[:, np.newaxis]])
+            out = self._fit_chi2(G_tmp, weights, fitter)
+            if out is None:
+                continue
+            chi2, coeffs = out
+            coeff_post = float(coeffs[-1])
 
-            try:
-                fit_result = fitter.fit(G_tmp, self.y, weights)
-                ssr = float(np.nansum(fit_result['residuals'] ** 2))
-
-                if ssr < best_ssr:
-                    best_ssr = ssr
-                    best_tau = tau
-                    best_template = template
-
-            except (np.linalg.LinAlgError, ValueError) as e:
-                logger.debug(f"Failed to fit τ={tau} for EQ {eq_idx}: {e}")
+            if ref_sign is not None and ref_sign != 0 and np.sign(coeff_post) != ref_sign:
                 continue
 
-        return best_tau, best_ssr, best_template
+            if chi2 < best_chi2:
+                best_chi2 = chi2
+                best_tau = tau
+                best_template = template
+                best_coeff = coeff_post
 
-    def _test_postseismic_significance(
-            self,
-            eq_idx: int,
-            eq_date,
-            G_baseline: np.ndarray,
-            existing_post_columns: List[np.ndarray],
-            ssr_baseline: float,
-            n_obs: int,
-            coeff_step_ref: float,
-            method: Optional[FittingStrategy] = None
-    ) -> Tuple[bool, Optional[int], Optional[np.ndarray], Dict]:
-        """Test if adding postseismic significantly improves model.
+        return best_tau, best_chi2, best_template, best_coeff
 
-        Includes sign consistency check: postseismic must have same sign as step.
+    def _test_postseismic_significance(self,
+                                       eq_idx: int,
+                                       eq_day,
+                                       G_baseline: np.ndarray,
+                                       post_specs: List[Dict],
+                                       chi2_baseline: float,
+                                       n_obs: int,
+                                       coeff_step_ref: float,
+                                       weights: np.ndarray,
+                                       builder: DesignMatrixBuilder,
+                                       fitter: FittingStrategy
+                                       ) -> Tuple[bool, Optional[float], Optional[np.ndarray], Dict]:
+        """Test whether adding a postseismic term significantly improves the fit.
+
+        Includes sign consistency (postseismic must have the same sign as the step).
         """
-        from ..strategies.fitting import OLSFitter
+        existing_cols = [builder.make_postseismic_column(s['eq_day'], s['tau']) for s in post_specs]
 
-        # Find best τ
-        best_tau, best_ssr, best_template = self._optimize_tau_for_eq(
-            eq_idx, eq_date, G_baseline, existing_post_columns, method
-        )
+        best_tau, best_chi2, best_template, coeff_post = self._optimize_tau_for_eq(
+            eq_day, G_baseline, existing_cols, weights, builder, fitter)
 
         if best_tau is None:
-            logger.warning(f"EQ {eq_idx}: Could not find valid τ")
+            logger.warning(f"EQ {eq_idx}: could not find a valid tau")
             return False, None, None, {}
 
-        # Fit with postseismic to get coefficient
-        if existing_post_columns:
-            G_with = np.hstack([
-                G_baseline,
-                np.column_stack(existing_post_columns + [best_template])
-            ])
-        else:
-            G_with = np.hstack([G_baseline, best_template[:, np.newaxis]])
-
-        fitter = method or OLSFitter()
-        weights = 1.0 / self.uncertainties
-        weights[~np.isfinite(weights)] = 0.0
-
-        try:
-            fit_result = fitter.fit(G_with, self.y, weights)
-            coeffs = fit_result['coeffs']
-            coeff_post = coeffs[-1]  # Last column
-        except Exception as e:
-            logger.warning(f"EQ {eq_idx}: Failed to fit with postseismic: {e}")
-            return False, None, None, {}
-
-        # Sign consistency check
         if self.config.enforce_postseismic_sign_consistency:
             if np.sign(coeff_step_ref) != np.sign(coeff_post):
-                logger.info(f"    EQ {eq_idx}: opposite sign "
-                            f"(step={coeff_step_ref:.2f}mm, post={coeff_post:.2f}mm) → REJECTED")
+                logger.info(f"  EQ {eq_idx}: opposite sign "
+                            f"(step={coeff_step_ref:.2f}mm, post={coeff_post:.2f}mm) -> REJECTED")
                 return False, None, None, {
                     'reason': 'opposite sign',
                     'coeff_step': coeff_step_ref,
-                    'coeff_post': coeff_post
+                    'coeff_post': coeff_post,
                 }
 
-        # Statistical test
-        p_baseline = G_baseline.shape[1] + len(existing_post_columns)
-        p_with = p_baseline + 1
+        n_post = len(post_specs)
+        n_cols_without = G_baseline.shape[1] + n_post
+        p_without = self._n_params(n_cols_without, n_post)
+        p_with = self._n_params(n_cols_without + 1, n_post + 1)
 
         criterion = self.config.postseismic_selection_criterion
         threshold = self.config.postseismic_selection_threshold
 
         metrics = {
             'best_tau': best_tau,
-            'ssr_without': ssr_baseline,
-            'ssr_with': best_ssr,
-            'coeff_post': coeff_post
+            'chi2_without': chi2_baseline,
+            'chi2_with': best_chi2,
+            'delta_chi2': best_chi2 - chi2_baseline,
+            'coeff_post': coeff_post,
         }
 
         if criterion == 'always':
             is_significant = True
             metrics['reason'] = 'always included'
 
-        elif criterion == 'aic':
-            aic_without = self._compute_information_criterion(
-                ssr_baseline, n_obs, p_baseline, 'aic'
-            )
-            aic_with = self._compute_information_criterion(
-                best_ssr, n_obs, p_with, 'aic'
-            )
-            delta_aic = aic_with - aic_without
-
-            is_significant = delta_aic < threshold
-            metrics['delta_aic'] = delta_aic
-            metrics['reason'] = f"ΔAIC={delta_aic:.1f}"
-
-        elif criterion == 'bic':
-            bic_without = self._compute_information_criterion(
-                ssr_baseline, n_obs, p_baseline, 'bic'
-            )
-            bic_with = self._compute_information_criterion(
-                best_ssr, n_obs, p_with, 'bic'
-            )
-            delta_bic = bic_with - bic_without
-
-            is_significant = delta_bic < threshold
-            metrics['delta_bic'] = delta_bic
-            metrics['reason'] = f"ΔBIC={delta_bic:.1f}"
+        elif criterion in ('aic', 'bic'):
+            ic_without = self._compute_information_criterion(chi2_baseline, n_obs, p_without, criterion)
+            ic_with = self._compute_information_criterion(best_chi2, n_obs, p_with, criterion)
+            delta_ic = ic_with - ic_without
+            is_significant = delta_ic < threshold
+            metrics[f'delta_{criterion}'] = delta_ic
+            metrics['reason'] = (f"Δ{criterion.upper()}={delta_ic:.1f}, "
+                                 f"Δχ²={metrics['delta_chi2']:.1f}")
 
         elif criterion == 'ftest':
-            p_value = self._compute_ftest(
-                ssr_baseline, best_ssr, n_obs, p_baseline, p_with
-            )
+            p_value = self._compute_ftest(chi2_baseline, best_chi2, n_obs, p_without, p_with)
             is_significant = p_value < threshold
             metrics['p_value'] = p_value
-            metrics['reason'] = f"p={p_value:.4f}"
+            metrics['reason'] = f"p={p_value:.4f}, Δχ²={metrics['delta_chi2']:.1f}"
 
         else:
             raise ValueError(f"Unknown criterion: {criterion}")
 
         return is_significant, best_tau, best_template, metrics
 
+    def _backfit_tau(self,
+                     G_baseline: np.ndarray,
+                     post_specs: List[Dict],
+                     weights: np.ndarray,
+                     builder: DesignMatrixBuilder,
+                     fitter: FittingStrategy,
+                     n_passes: int) -> None:
+        """Re-optimise each accepted tau with all other postseismic terms held fixed.
+
+        Fixes the order dependence of the greedy pass. Updates post_specs in place.
+        """
+        if len(post_specs) < 2 or n_passes <= 0:
+            return
+
+        for p in range(n_passes):
+            changed = False
+            for k, spec in enumerate(post_specs):
+                others = [builder.make_postseismic_column(s['eq_day'], s['tau'])
+                          for j, s in enumerate(post_specs) if j != k]
+                ref_sign = (np.sign(spec['coeff_step'])
+                            if self.config.enforce_postseismic_sign_consistency else None)
+
+                tau, _, _, coeff_post = self._optimize_tau_for_eq(
+                    spec['eq_day'], G_baseline, others, weights, builder, fitter, ref_sign)
+
+                if tau is not None and tau != spec['tau']:
+                    logger.info(f"  Backfit pass {p + 1}: EQ {spec['eq_idx']} "
+                                f"tau {spec['tau']} -> {tau}")
+                    spec['tau'] = tau
+                    spec['coeff_post'] = coeff_post
+                    changed = True
+
+            if not changed:
+                break
+
+    # ------------------------------------------------------------------ #
+    # Design matrix
+    # ------------------------------------------------------------------ #
     def build_design_matrix(self) -> np.ndarray:
         """Build design matrix G with multi-tier postseismic selection.
 
@@ -495,150 +434,118 @@ class TrajectoryModel:
         1. Magnitude threshold (if d_param is set)
         2. Step amplitude threshold (always applied)
         3. Sign consistency (postseismic must match step sign)
-        4. Statistical significance (ΔAIC/ΔBIC/F-test)
+        4. Statistical significance (ΔAIC/ΔBIC/F-test, on weighted chi-square)
+        Then optional backfitting of tau values.
+
+        The accepted terms are stored in self.post_specs, and the same specs are
+        used by predict(), so fit and prediction share one assembly path.
         """
-        from ..templates.templates import TemplateFunctions
-        from ..design.matrix import DesignMatrixBuilder
-        from ..strategies.fitting import OLSFitter
+        templates = TemplateFunctions(self.t_days, self.t0)
+        builder = DesignMatrixBuilder(templates, self.config)
+        self.post_specs = []
 
         if not self.config.fit_postseismic_decay:
-            templates = TemplateFunctions(self.t_days, self.t0)
-            builder = DesignMatrixBuilder(templates, self.config)
             self.G, self.template_names = builder.build(self.selected_sse, self.selected_eq)
             logger.info(f"Postseismic disabled, final matrix: {self.G.shape}")
             return self.G
 
-        templates = TemplateFunctions(self.t_days, self.t0)
-        builder = DesignMatrixBuilder(templates, self.config)
+        # Step 1: baseline + SSE + EQ steps (no postseismic)
+        G_baseline, names_baseline = builder.build_baseline(self.selected_sse, self.selected_eq)
+        logger.info(f"Baseline design matrix: {G_baseline.shape[0]} x {G_baseline.shape[1]}")
 
-        # Step 1: Build baseline + SSE + EQ steps (no postseismic)
-        baseline_cols = []
-        baseline_cols.extend(builder._build_base_model())
-
-        if self.config.include_seasonal:
-            baseline_cols.extend(builder._build_seasonal())
-
-        baseline_cols.extend(builder._build_sse_templates(self.selected_sse))
-
-        # Add EQ steps only
-        for i, eq in enumerate(self.selected_eq):
-            step = templates.step(eq['eq_day'])
-            baseline_cols.append(step)
-            eq_str = eq['eq_day'].strftime('%Y-%m-%d')
-            builder.template_names.append(f"EQ_{i}_{eq_str}_step")
-
-        G_baseline = np.column_stack(baseline_cols) if baseline_cols else np.empty((len(self.t_days), 0))
-        names_baseline = builder.template_names.copy()
-
-        logger.info(f"Baseline design matrix: {G_baseline.shape[0]} × {G_baseline.shape[1]}")
-
-        # Step 2: Fit baseline to get SSR and step coefficients
+        # Step 2: baseline fit (weighted chi-square and step coefficients)
         fitter = OLSFitter()
-        weights = 1.0 / self.uncertainties
-        weights[~np.isfinite(weights)] = 0.0
+        weights = self._default_weights()
+        n_obs = int(np.sum(self._valid_obs_mask(weights)))
 
-        valid_mask = ~np.isnan(self.y)
-        n_obs = np.sum(valid_mask)
-
-        try:
-            result_baseline = fitter.fit(G_baseline, self.y, weights)
-            ssr_baseline = float(np.nansum(result_baseline['residuals'] ** 2))
-            coeffs_baseline = result_baseline['coeffs']
-        except Exception as e:
-            logger.error(f"Failed to fit baseline model: {e}")
-            self.G = G_baseline
-            self.template_names = names_baseline
+        out = self._fit_chi2(G_baseline, weights, fitter)
+        if out is None:
+            logger.error("Failed to fit baseline model; postseismic selection skipped")
+            self.G, self.template_names = G_baseline, names_baseline
             return self.G
+        chi2_baseline, coeffs_baseline = out
+        logger.info(f"Baseline chi2: {chi2_baseline:.2f} (n={n_obs})")
 
-        logger.info(f"Baseline SSR: {ssr_baseline:.2f}")
-
-        # Step 3: Apply magnitude and step amplitude filters
-        candidate_eqs = []
-        n_baseline_cols = G_baseline.shape[1]
-
+        # Step 3: magnitude and step-amplitude filters
+        candidates = []
         for i, eq in enumerate(self.selected_eq):
             eq_mag = eq.get('magnitude', 0)
             event_type = eq.get('event_type', 'earthquake')
 
-            # Tier 1: Magnitude filter
             if not self._should_consider_postseismic(eq):
-                # ← REPLACE logger.debug line with these 4 lines:
                 if event_type != 'earthquake':
-                    logger.info(f"  EQ {i} ({event_type}): event type excludes postseismic → SKIPPED")
+                    logger.info(f"  EQ {i} ({event_type}): event type excludes postseismic -> SKIPPED")
                 else:
-                    logger.debug(f"  EQ {i} (M{eq_mag:.1f}): below magnitude threshold → SKIPPED")
+                    logger.debug(f"  EQ {i} (M{eq_mag:.1f}): below magnitude threshold -> SKIPPED")
                 continue
 
-            # Tier 2: Step amplitude filter
-            idx_step = self._get_eq_step_index(i, n_baseline_cols)
-            coeff_step = coeffs_baseline[idx_step]
+            idx_step = builder.eq_step_index(names_baseline, i)
+            if idx_step is None:
+                logger.warning(f"  EQ {i}: step column not found -> SKIPPED")
+                continue
+            coeff_step = float(coeffs_baseline[idx_step])
 
             if abs(coeff_step) < self.config.postseismic_min_step_amplitude:
                 logger.info(f"  EQ {i} (M{eq_mag:.1f}): step={coeff_step:.2f}mm "
-                            f"< {self.config.postseismic_min_step_amplitude:.1f}mm → SKIPPED")
+                            f"< {self.config.postseismic_min_step_amplitude:.1f}mm -> SKIPPED")
                 continue
 
-            # Passed filters
-            candidate_eqs.append((i, eq, coeff_step))
+            candidates.append((i, eq, coeff_step))
 
-        if not candidate_eqs:
+        if not candidates:
             logger.info("No earthquakes passed magnitude/amplitude filters")
-            self.G = G_baseline
-            self.template_names = names_baseline
+            self.G, self.template_names = G_baseline, names_baseline
             return self.G
 
-        logger.info(f"Filtered to {len(candidate_eqs)}/{len(self.selected_eq)} candidate EQs "
+        logger.info(f"Filtered to {len(candidates)}/{len(self.selected_eq)} candidate EQs "
                     f"(criterion: {self.config.postseismic_selection_criterion})")
 
-        # Step 4: Test each candidate with statistical test + sign check
-        post_columns = []
-        post_names = []
+        # Step 4: greedy forward selection
+        post_specs: List[Dict] = []
+        chi2_current = chi2_baseline
 
-        for eq_idx, eq, coeff_step in candidate_eqs:
-            eq_date = eq['eq_day']
+        for eq_idx, eq, coeff_step in candidates:
+            eq_day = eq['eq_day']
             eq_mag = eq.get('magnitude', 0)
 
-            is_significant, best_tau, best_template, metrics = self._test_postseismic_significance(
-                eq_idx=eq_idx,
-                eq_date=eq_date,
-                G_baseline=G_baseline,
-                existing_post_columns=post_columns,
-                ssr_baseline=ssr_baseline,
-                n_obs=n_obs,
-                coeff_step_ref=coeff_step
-            )
+            is_sig, best_tau, _, metrics = self._test_postseismic_significance(
+                eq_idx=eq_idx, eq_day=eq_day, G_baseline=G_baseline,
+                post_specs=post_specs, chi2_baseline=chi2_current, n_obs=n_obs,
+                coeff_step_ref=coeff_step, weights=weights,
+                builder=builder, fitter=fitter)
 
-            if is_significant and best_template is not None:
-                post_columns.append(best_template)
-                eq_str = eq_date.strftime('%Y-%m-%d')
-                post_names.append(f"EQ_{eq_idx}_{eq_str}_log_tau{best_tau}")
-
-                logger.info(f"    EQ {eq_idx} (M{eq_mag:.1f}, step={coeff_step:.1f}mm): "
-                            f"τ={best_tau}d, {metrics['reason']} → KEPT")
-
-                # Update baseline SSR for next test
-                ssr_baseline = metrics['ssr_with']
+            if is_sig and best_tau is not None:
+                post_specs.append({
+                    'eq_idx': eq_idx,
+                    'eq_day': eq_day,
+                    'tau': best_tau,
+                    'coeff_step': coeff_step,
+                    'coeff_post': metrics['coeff_post'],
+                })
+                logger.info(f"  EQ {eq_idx} (M{eq_mag:.1f}, step={coeff_step:.1f}mm): "
+                            f"tau={best_tau}d, {metrics['reason']} -> KEPT")
+                chi2_current = metrics['chi2_with']
             else:
                 reason = metrics.get('reason', 'failed')
-                logger.info(f"    EQ {eq_idx} (M{eq_mag:.1f}, step={coeff_step:.1f}mm): {reason} → SKIPPED")
+                logger.info(f"  EQ {eq_idx} (M{eq_mag:.1f}, step={coeff_step:.1f}mm): "
+                            f"{reason} -> SKIPPED")
 
-        # Step 5: Assemble final design matrix
-        if post_columns:
-            G_final = np.hstack([G_baseline, np.column_stack(post_columns)])
-            names_final = names_baseline + post_names
-        else:
-            G_final = G_baseline
-            names_final = names_baseline
-            logger.info("No postseismic events passed all filters")
+        # Step 5: backfitting of tau values
+        n_passes = int(getattr(self.config, 'postseismic_backfit_passes', 2))
+        self._backfit_tau(G_baseline, post_specs, weights, builder, fitter, n_passes)
 
-        self.G = G_final
-        self.template_names = names_final
+        # Step 6: final assembly through the shared path
+        self.post_specs = post_specs
+        self.G, self.template_names = builder.build(
+            self.selected_sse, self.selected_eq, post_specs=post_specs)
 
-        logger.info(f"Final design matrix: {self.G.shape[0]} × {self.G.shape[1]} "
-                    f"({len(post_columns)}/{len(candidate_eqs)} postseismic)")
-
+        logger.info(f"Final design matrix: {self.G.shape[0]} x {self.G.shape[1]} "
+                    f"({len(post_specs)}/{len(candidates)} postseismic)")
         return self.G
 
+    # ------------------------------------------------------------------ #
+    # Event selection from catalogs
+    # ------------------------------------------------------------------ #
     def _select_sse_events(self) -> List[Dict]:
         selected = []
         for ev in self.sse_catalog:
@@ -646,29 +553,24 @@ class TrajectoryModel:
             evc['start_day'] = ev['start']
             evc['end_day'] = ev['end']
 
-            # Keep SSE if it overlaps with time series at all (conservative)
+            # Keep SSE if it overlaps with the time series at all (conservative)
             if evc['end_day'] < self.t.min() or evc['start_day'] > self.t.max():
                 logger.debug(f"Skipping SSE outside time range: "
                              f"{evc['start_day']} to {evc['end_day']}")
                 continue
 
             if self.config.d_param is None:
-                # Include all events
                 selected.append(evc)
             else:
-                # Apply distance filtering
                 dist = self.geocalc.distance_km(
-                    self.station_lat, self.station_lon,
-                    ev['lat'], ev['lon']
-                )
-                rad = self.geocalc.radius_from_magnitude(
-                    ev['magnitude'], self.config.d_param
-                )
+                    self.station_lat, self.station_lon, ev['lat'], ev['lon'])
+                rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param)
                 if dist <= rad:
                     selected.append(evc)
 
         if self.config.merge_close_sse:
-            selected = EventCatalog.merge_close_events(selected, gap_threshold=self.config.max_overlap_merge_sse)
+            selected = EventCatalog.merge_close_events(
+                selected, gap_threshold=self.config.max_overlap_merge_sse)
 
         return selected
 
@@ -679,7 +581,6 @@ class TrajectoryModel:
             evc = dict(ev)
             evc['eq_day'] = ev.get('date') or ev.get('time')
 
-            # skip events without date/time
             if evc['eq_day'] is None:
                 logger.warning(f"Skipping earthquake without date/time: {ev}")
                 continue
@@ -690,8 +591,7 @@ class TrajectoryModel:
 
             if self.config.d_param is not None:
                 dist = self.geocalc.distance_km(
-                    self.station_lat, self.station_lon, ev['lat'], ev['lon']
-                )
+                    self.station_lat, self.station_lon, ev['lat'], ev['lon'])
                 rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param)
                 if dist <= rad:
                     selected.append(evc)
@@ -703,242 +603,13 @@ class TrajectoryModel:
 
         return selected
 
-    def _select_best_postseismic_per_eq(
-            self,
-            G: np.ndarray,
-            template_names: List[str],
-            method: Optional[FittingStrategy] = None
-    ) -> Tuple[np.ndarray, List[str]]:
-        """
-        Postprocess design matrix to keep only the best-τ postseismic
-        template per earthquake (based on residual norm).
-
-        Uses the same fitting strategy and weighting as the main fit() method.
-
-        Args:
-            G: full design matrix (baseline + SSE + EQ step + all postseismic)
-            template_names: list of column names, same length as G.shape[1]
-            method: Fitting strategy (default: OLS)
-
-        Returns:
-            (G_reduced, names_reduced)
-        """
-        # Initialize fitter and weights (same as in fit())
-        fitter = method or OLSFitter()
-
-        weights = 1.0 / self.uncertainties
-        weights[~np.isfinite(weights)] = 0.0
-
-        y = self.y
-        G_full = G
-        names_full = template_names
-
-        # Identify baseline columns
-        baseline_idx = []
-        sse_idx = []
-        eq_step_idx = []
-        post_idx_by_eq = {}
-
-        for j, name in enumerate(names_full):
-            if name.startswith("SSE_"):
-                sse_idx.append(j)
-            elif "_step" in name and name.startswith("EQ_"):
-                eq_id = name.split("_")[1]  # 'EQ_i_YYYY-MM-DD_step' → i
-                eq_step_idx.append(j)
-                post_idx_by_eq.setdefault(eq_id, [])
-            elif "_log_tau" in name and name.startswith("EQ_"):
-                parts = name.split("_")  # EQ, i, YYYY-MM-DD, 'log', 'tauX'
-                eq_id = parts[1]
-                post_idx_by_eq.setdefault(eq_id, []).append(j)
-            else:
-                baseline_idx.append(j)
-
-        # If no postseismic columns, nothing to do
-        if not any(post_idx_by_eq.values()):
-            logger.info("No postseismic columns found, skipping τ selection")
-            return G_full, names_full
-
-        # For each EQ, pick best τ (if any)
-        keep_post_indices = []
-
-        for eq_id, idx_list in post_idx_by_eq.items():
-            if not idx_list:
-                continue
-
-            best_idx = None
-            best_ssr = np.inf
-
-            # Columns that are always present: baseline + all SSE + all EQ steps
-            # (all postseismic candidates are tested one at a time)
-            for j_post in idx_list:
-                cols_tmp = (
-                        baseline_idx
-                        + sse_idx
-                        + eq_step_idx
-                        + [j_post]
-                )
-                G_tmp = G_full[:, cols_tmp]
-
-                try:
-                    # Use the fitting strategy (same as main fit)
-                    fit_result = fitter.fit(G_tmp, y, weights)
-                    residuals = fit_result["residuals"]
-
-                    # Compute SSR
-                    ssr = float(np.nansum(residuals ** 2))
-
-                    if ssr < best_ssr:
-                        best_ssr = ssr
-                        best_idx = j_post
-
-                except (np.linalg.LinAlgError, ValueError) as e:
-                    logger.warning(f"Failed to fit postseismic τ for EQ {eq_id}, "
-                                   f"column {j_post}: {e}")
-                    continue
-
-            if best_idx is not None:
-                keep_post_indices.append(best_idx)
-                # Extract τ value from name for logging
-                tau_name = names_full[best_idx]
-                logger.info(f"EQ {eq_id}: selected {tau_name}")
-
-        # Build final column index list:
-        # baseline + SSE + EQ step + chosen postseismic (one per EQ)
-        keep_indices = sorted(
-            set(baseline_idx) | set(sse_idx) | set(eq_step_idx) | set(keep_post_indices)
-        )
-
-        G_reduced = G_full[:, keep_indices]
-        names_reduced = [names_full[j] for j in keep_indices]
-
-        n_original_post = sum(len(v) for v in post_idx_by_eq.values())
-        n_selected_post = len(keep_post_indices)
-        logger.info(f"Postseismic τ selection: {n_original_post} candidates → "
-                    f"{n_selected_post} selected (1 per EQ)")
-
-        return G_reduced, names_reduced
-
-    '''def _select_postseismic_events(
-            self,
-            G_baseline: np.ndarray,
-            post_templates: List[Dict],
-            selector: 'EventSelector'
-    ) -> List[int]:
-        """Apply event selector to decide which EQs need postseismic decay.
-
-        This reuses the existing EventSelector interface, treating postseismic
-        candidates as events (same as SSE selection).
-
-        Args:
-            G_baseline: Design matrix with baseline + SSE + all EQ steps (no postseismic)
-            post_templates: List of reference postseismic templates
-            selector: EventSelector instance (e.g., AmplitudeThresholdSelector)
-
-        Returns:
-            List of selected indices into post_templates
-        """
-        if len(post_templates) == 0:
-            logger.info("No postseismic candidates to select from")
-            return []
-
-        valid_mask = ~np.isnan(self.y)
-
-        # Apply selector (same API as SSE/EQ selection!)
-        selected_indices = selector.select(
-            y=self.y,
-            G_baseline=G_baseline,
-            event_templates=post_templates,
-            valid_mask=valid_mask
-        )
-
-        logger.info(f"Postseismic selection: {len(selected_indices)}/{len(post_templates)} "
-                    f"earthquakes need postseismic decay")
-
-        return selected_indices
-
-    def _optimize_postseismic_tau(
-            self,
-            G_base: np.ndarray,
-            selected_indices: List[int],
-            post_metadata: List[Dict],
-            method: Optional[FittingStrategy] = None
-    ) -> Tuple[List[np.ndarray], List[str]]:
-        """Find best τ for each selected postseismic event.
-
-        Args:
-            G_base: Design matrix with baseline + SSE + all EQ steps
-            selected_indices: Indices of EQs that need postseismic
-            post_metadata: Metadata for all postseismic candidates
-            method: Fitting strategy (default: OLS)
-
-        Returns:
-            (post_columns, post_names): Lists of templates and names for selected postseismics
-        """
-        from ..templates.templates import TemplateFunctions
-        from ..strategies.fitting import OLSFitter
-
-        if len(selected_indices) == 0:
-            return [], []
-
-        # Initialize fitter and weights (same as main fit)
-        fitter = method or OLSFitter()
-        weights = 1.0 / self.uncertainties
-        weights[~np.isfinite(weights)] = 0.0
-
-        templater = TemplateFunctions(self.t_days, self.t0)
-
-        post_columns = []
-        post_names = []
-
-        logger.info(f"Optimizing τ for {len(selected_indices)} postseismic events...")
-
-        for idx in selected_indices:
-            meta = post_metadata[idx]
-            eq_date = meta['eq_date']
-            eq_idx = meta['eq_index']
-
-            # Test all τ values
-            best_tau = None
-            best_ssr = np.inf
-            best_template = None
-
-            for tau in self.config.tau_grid:
-                template = templater.log_decay(eq_date, tau)
-
-                # Build candidate G with all existing columns + this postseismic
-                G_tmp = np.hstack([
-                    G_base,
-                    np.column_stack(post_columns + [template]) if post_columns else template[:, np.newaxis]
-                ])
-
-                try:
-                    fit_result = fitter.fit(G_tmp, self.y, weights)
-                    ssr = float(np.nansum(fit_result['residuals'] ** 2))
-
-                    if ssr < best_ssr:
-                        best_ssr = ssr
-                        best_tau = tau
-                        best_template = template
-
-                except (np.linalg.LinAlgError, ValueError) as e:
-                    logger.debug(f"Failed to fit τ={tau} for EQ {eq_idx}: {e}")
-                    continue
-
-            if best_template is not None:
-                post_columns.append(best_template)
-                eq_str = eq_date.strftime('%Y-%m-%d')
-                post_names.append(f"EQ_{eq_idx}_{eq_str}_log_tau{best_tau}")
-                logger.info(f"  EQ {eq_idx}: τ = {best_tau} days")
-            else:
-                logger.warning(f"Could not find valid τ for EQ {eq_idx}, skipping")
-
-        logger.info(f"Optimized τ for {len(post_columns)}/{len(selected_indices)} events")
-
-        return post_columns, post_names'''
-
+    # ------------------------------------------------------------------ #
+    # Event pruning
+    # ------------------------------------------------------------------ #
     def select_events(self, selector: EventSelector,
                       event_type: str = 'sse', plot: bool = False,
-                      save_plot: Optional[str] = None, update_catalog: bool = True) -> List[int]:
+                      save_plot: Optional[str] = None,
+                      update_catalog: bool = True) -> List[int]:
         """Select events using a given strategy.
 
         Args:
@@ -948,22 +619,17 @@ class TrajectoryModel:
         Returns:
             List of selected event indices
         """
-        from ..templates.templates import TemplateFunctions
-        from ..design.matrix import DesignMatrixBuilder
-
         templates = TemplateFunctions(self.t_days, self.t0)
         builder = DesignMatrixBuilder(templates, self.config)
 
-        # Build baseline design matrix
         baseline_cols = []
         baseline_cols.extend(builder._build_base_model())
-
         if self.config.include_seasonal:
             baseline_cols.extend(builder._build_seasonal())
 
-        G_baseline = np.column_stack(baseline_cols) if baseline_cols else np.empty((len(self.t_days), 0))
+        G_baseline = (np.column_stack(baseline_cols) if baseline_cols
+                      else np.empty((len(self.t_days), 0)))
 
-        # Prepare event templates
         event_catalog = self.selected_sse if event_type == 'sse' else self.selected_eq
         event_templates_list = []
 
@@ -974,28 +640,26 @@ class TrajectoryModel:
             else:
                 template = templates.step(ev['eq_day'])
                 name = f"EQ_{i}"
-
             event_templates_list.append({'template': template, 'name': name})
 
-        # Select events
         valid_mask = ~np.isnan(self.y)
         selected_indices = selector.select(self.y, G_baseline, event_templates_list, valid_mask)
 
         logger.info(f"Selected {len(selected_indices)}/{len(event_catalog)} {event_type} events")
 
-        # optionally update catalog
         if update_catalog:
             if event_type == 'sse':
                 original_count = len(self.selected_sse)
                 self.selected_sse = [self.selected_sse[i] for i in selected_indices]
-                logger.info(f"Updated SSE catalog: {original_count} → {len(self.selected_sse)} events")
+                logger.info(f"Updated SSE catalog: {original_count} -> {len(self.selected_sse)} events")
             else:
                 original_count = len(self.selected_eq)
                 self.selected_eq = [self.selected_eq[i] for i in selected_indices]
-                logger.info(f"Updated EQ catalog: {original_count} → {len(self.selected_eq)} events")
+                logger.info(f"Updated EQ catalog: {original_count} -> {len(self.selected_eq)} events")
 
-            # Force design matrix rebuild
+            # Event indices changed: force a full rebuild (incl. postseismic selection)
             self.G = None
+            self.post_specs = []
 
         if plot and hasattr(selector, 'plot_selection'):
             selector.plot_selection(save_path=save_plot)
@@ -1017,36 +681,25 @@ class TrajectoryModel:
         Returns:
             ModelResults with selected events
         """
-        from ..events.event_selection import KneeEventSelector
-
-        # Select events
         selector = KneeEventSelector(criterion=criterion, method=method)
-        selected_indices = self.select_events(selector, event_type=event_type)
+        selected_indices = self.select_events(
+            selector, event_type=event_type, plot=plot,
+            save_plot=save_plot, update_catalog=True)  # updates selected_sse / selected_eq once
+        self.G = None
 
-        # Update selected events
-        if event_type == 'sse':
-            original_sse = self.selected_sse.copy()
-            self.selected_sse = [original_sse[i] for i in selected_indices]
-            logger.info(f"Pruned SSE catalog: {len(original_sse)} → {len(self.selected_sse)}")
-        else:
-            original_eq = self.selected_eq.copy()
-            self.selected_eq = [original_eq[i] for i in selected_indices]
-            logger.info(f"Pruned EQ catalog: {len(original_eq)} → {len(self.selected_eq)}")
-
-        # Fit with pruned catalog
-        self.G = None  # Force rebuild
         results = self.fit(weights=weights)
 
-        # Store selection info
         results.metadata['event_selection'] = {
             'criterion': criterion,
             'method': method,
             'n_selected': len(selected_indices),
-            'selected_indices': selected_indices
+            'selected_indices': selected_indices,
         }
-
         return results
 
+    # ------------------------------------------------------------------ #
+    # Fit / predict
+    # ------------------------------------------------------------------ #
     def fit(self, method: Optional[FittingStrategy] = None,
             weights: Optional[np.ndarray] = None,
             compute_uncertainty: bool = True) -> ModelResults:
@@ -1054,7 +707,7 @@ class TrajectoryModel:
 
         Args:
             method: Fitting strategy (default: OLS)
-            weights: Optional observation weights
+            weights: Optional observation weights (default 1/sigma)
             compute_uncertainty: Whether to compute uncertainty estimates
 
         Returns:
@@ -1064,14 +717,10 @@ class TrajectoryModel:
             self.build_design_matrix()
 
         fitter = method or OLSFitter()
-
-        if weights is None:
-            weights = 1.0 / self.uncertainties
-            weights[~np.isfinite(weights)] = 0.0
+        weights = self._prepare_weights(weights)
 
         fit_result = fitter.fit(self.G, self.y, weights)
 
-        # Compute uncertainty if requested
         uncertainty_results = None
         if compute_uncertainty:
             from .uncertainty_quantification import UncertaintyQuantifier
@@ -1082,13 +731,15 @@ class TrajectoryModel:
                 valid_mask=valid_mask,
                 coeffs=fit_result['coeffs'],
                 use_hc=False,
-                compute_vif=True
+                compute_vif=True,
+                weights=weights,
             )
 
         metadata = {k: v for k, v in fit_result.items()
                     if k not in ['coeffs', 'fitted', 'residuals']}
         metadata['method'] = fitter.__class__.__name__
         metadata['uncertainty'] = uncertainty_results
+        metadata['post_specs'] = [dict(s) for s in self.post_specs]
 
         self.results = ModelResults.from_fit(
             coeffs=fit_result['coeffs'],
@@ -1096,15 +747,17 @@ class TrajectoryModel:
             residuals=fit_result['residuals'],
             template_names=self.template_names,
             weights=weights,
-            **metadata
+            **metadata,
         )
 
         logger.info(f"Fit complete: RMS = {self.results.rms:.3f} mm")
-
         return self.results
 
     def predict(self, t_pred: np.ndarray) -> np.ndarray:
         """Predict at new time points.
+
+        Uses the same builder path and the same postseismic terms (self.post_specs)
+        as the fit, so the columns always match the fitted coefficients.
 
         Args:
             t_pred: Prediction times (datetime array)
@@ -1118,12 +771,10 @@ class TrajectoryModel:
         if self.results is None:
             raise ValueError("Model must be fit before prediction")
 
-        # Validate prediction times
         t_pred = np.asarray(t_pred, dtype='datetime64')
         if len(t_pred) == 0:
             raise ValueError("t_pred cannot be empty")
 
-        # Warn if extrapolating far beyond data range
         t_min, t_max = self.t.min(), self.t.max()
         if t_pred.min() < t_min or t_pred.max() > t_max:
             import warnings
@@ -1131,13 +782,18 @@ class TrajectoryModel:
                 f"Prediction times [{t_pred.min()}, {t_pred.max()}] "
                 f"outside training range [{t_min}, {t_max}]. "
                 f"Extrapolation may be unreliable.",
-                UserWarning
+                UserWarning,
             )
 
-        # Build design matrix for prediction times
         t_days_pred = (t_pred - self.t0).astype('timedelta64[D]').astype(float)
         templates_pred = TemplateFunctions(t_days_pred, self.t0)
         builder = DesignMatrixBuilder(templates_pred, self.config)
-        G_pred, _ = builder.build(self.selected_sse, self.selected_eq)
+        G_pred, names_pred = builder.build(
+            self.selected_sse, self.selected_eq, post_specs=self.post_specs)
+
+        if G_pred.shape[1] != len(self.results.coeffs):
+            raise ValueError(
+                f"Prediction design matrix has {G_pred.shape[1]} columns but the fit has "
+                f"{len(self.results.coeffs)} coefficients; re-fit the model before predicting.")
 
         return G_pred @ self.results.coeffs

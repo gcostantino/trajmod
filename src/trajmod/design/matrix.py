@@ -1,39 +1,111 @@
 """Design matrix construction for trajectory models."""
-import numpy as np
-from typing import List, Dict, Tuple
 import logging
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 
 from trajmod.config.modelconfig import ModelConfig
 from trajmod.templates.templates import TemplateFunctions
 
 logger = logging.getLogger(__name__)
 
+# Periods already covered by the annual / semiannual terms of _build_seasonal
+_BASE_SEASONAL_PERIODS = (365.25, 365.25 / 2)
+
 
 class DesignMatrixBuilder:
-    """Builder for design matrix G."""
+    """Builder for design matrix G.
+
+    Column order (stable, relied upon by name-based lookups):
+        offset, trend, [acceleration], [seasonal terms], SSE_*, EQ_*_step, EQ_*_log_tau*
+    """
 
     def __init__(self, templates: TemplateFunctions, config: ModelConfig):
         self.templates = templates
         self.config = config
         self.template_names: List[str] = []
 
-    def build(self, selected_sse: List[Dict], selected_eq: List[Dict]) -> Tuple[np.ndarray, List[str]]:
-        """Build complete design matrix."""
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    def build(self,
+              selected_sse: List[Dict],
+              selected_eq: List[Dict],
+              post_specs: Optional[List[Dict]] = None) -> Tuple[np.ndarray, List[str]]:
+        """Build the complete design matrix.
+
+        Args:
+            selected_sse: SSE event dicts (with 'start_day', 'end_day').
+            selected_eq: Earthquake event dicts (with 'eq_day').
+            post_specs: Optional accepted postseismic terms, one dict per term:
+                {'eq_idx': int, 'eq_day': datetime, 'tau': float}.
+                'eq_idx' is the index of the earthquake in selected_eq.
+                If None or empty, no postseismic columns are added.
+
+        Returns:
+            (G, template_names)
+        """
         self.template_names = []
-        columns = []
+        columns = self.build_baseline_columns(selected_sse, selected_eq)
 
+        if post_specs:
+            columns.extend(self._build_postseismic_templates(post_specs))
+
+        G = self._stack(columns)
+        logger.debug(f"Design matrix: {G.shape[0]} x {G.shape[1]}")
+        return G, self.template_names
+
+    def build_baseline_columns(self,
+                               selected_sse: List[Dict],
+                               selected_eq: List[Dict]) -> List[np.ndarray]:
+        """Baseline + SSE + EQ steps (no postseismic).
+
+        Resets template_names and fills it with the names of the returned columns.
+        """
+        self.template_names = []
+        columns: List[np.ndarray] = []
         columns.extend(self._build_base_model())
-
         if self.config.include_seasonal:
             columns.extend(self._build_seasonal())
-
         columns.extend(self._build_sse_templates(selected_sse))
         columns.extend(self._build_earthquake_templates(selected_eq))
+        return columns
 
-        G = np.column_stack(columns) if columns else np.empty((len(self.templates.t_days), 0))
+    def build_baseline(self,
+                       selected_sse: List[Dict],
+                       selected_eq: List[Dict]) -> Tuple[np.ndarray, List[str]]:
+        """Same as build() without postseismic terms, returned as (G, names)."""
+        columns = self.build_baseline_columns(selected_sse, selected_eq)
+        return self._stack(columns), list(self.template_names)
 
-        logger.info(f"Design matrix: {G.shape[0]} x {G.shape[1]}")
-        return G, self.template_names
+    def make_postseismic_column(self, eq_day, tau: float) -> np.ndarray:
+        """Single log-decay column (used by the tau search in the model)."""
+        return self.templates.log_decay(eq_day, tau)
+
+    @staticmethod
+    def postseismic_name(eq_idx: int, eq_day, tau: float) -> str:
+        """Canonical name of a postseismic column."""
+        return f"EQ_{eq_idx}_{eq_day.strftime('%Y-%m-%d')}_log_tau{tau}"
+
+    @staticmethod
+    def eq_step_index(names: List[str], eq_idx: int) -> Optional[int]:
+        """Column index of the step of earthquake `eq_idx`, looked up by name.
+
+        Replaces any hard-coded column arithmetic. Returns None if not found.
+        """
+        prefix = f"EQ_{eq_idx}_"
+        for j, name in enumerate(names):
+            if name.startswith(prefix) and name.endswith("_step"):
+                return j
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Internal builders
+    # ------------------------------------------------------------------ #
+    def _stack(self, columns: List[np.ndarray]) -> np.ndarray:
+        if columns:
+            return np.column_stack(columns)
+        return np.empty((len(self.templates.t_days), 0))
 
     def _build_base_model(self) -> List[np.ndarray]:
         columns = []
@@ -59,15 +131,12 @@ class DesignMatrixBuilder:
         columns.append(self.templates.seasonal_cos(365.25 / 2))
         self.template_names.append('semiannual_cos')
 
-        '''if self.config.use_envelope_basis:
-            for T in self.config.envelope_periods:
-                columns.append(self.templates.seasonal_sin(T))
-                self.template_names.append(f'envelope_sin_{int(T / 365.25)}yr')
-                columns.append(self.templates.seasonal_cos(T))
-                self.template_names.append(f'envelope_cos_{int(T / 365.25)}yr')'''
-
         if self.config.use_envelope_basis:
             for T in self.config.envelope_periods:
+                # skip periods already present above (would make G rank deficient)
+                if any(np.isclose(T, p, rtol=1e-6) for p in _BASE_SEASONAL_PERIODS):
+                    logger.debug(f"Envelope period {T:.2f} d duplicates a base seasonal term, skipped")
+                    continue
                 columns.append(self.templates.seasonal_sin(T))
                 self.template_names.append(f'envelope_sin_{int(T)}d')
                 columns.append(self.templates.seasonal_cos(T))
@@ -89,11 +158,16 @@ class DesignMatrixBuilder:
         columns = []
         for i, eq in enumerate(selected_eq):
             eq_date = eq['eq_day']
-
-            step = self.templates.step(eq_date)
-            columns.append(step)
+            columns.append(self.templates.step(eq_date))
             eq_str = eq_date.strftime('%Y-%m-%d')
             self.template_names.append(f'EQ_{i}_{eq_str}_step')
-
         return columns
 
+    def _build_postseismic_templates(self, post_specs: List[Dict]) -> List[np.ndarray]:
+        columns = []
+        for spec in post_specs:
+            columns.append(self.templates.log_decay(spec['eq_day'], spec['tau']))
+            self.template_names.append(
+                self.postseismic_name(spec['eq_idx'], spec['eq_day'], spec['tau'])
+            )
+        return columns

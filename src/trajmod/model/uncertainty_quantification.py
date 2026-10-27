@@ -25,7 +25,7 @@ class UncertaintyQuantifier:
     @staticmethod
     def compute_covariance(G: np.ndarray, residuals: np.ndarray,
                            valid_mask: np.ndarray,
-                           use_hc: bool = False) -> np.ndarray:
+                           use_hc: bool = False, weights=None) -> np.ndarray:
         """Compute covariance matrix for OLS estimates.
 
         Args:
@@ -37,15 +37,23 @@ class UncertaintyQuantifier:
         Returns:
             Covariance matrix (P x P)
         """
-        Gsub = G[valid_mask, :]
-        residuals_sub = residuals[valid_mask]
+        # G_sub = G[valid_mask, :]
+        # residuals_sub = residuals[valid_mask]
+        mask = valid_mask.copy()
+        if weights is not None:
+            mask &= np.isfinite(weights) & (weights > 0)
+        G_sub, residuals_sub = G[mask], residuals[mask]
+        if weights is not None:
+            w = weights[mask]
+            G_sub = G_sub * w[:, None]
+            residuals_sub = residuals_sub * w
 
-        n = Gsub.shape[0]
-        p = Gsub.shape[1]
+        n = G_sub.shape[0]
+        p = G_sub.shape[1]
         dof = max(1, n - p)
 
         # Compute (G^T G)^{-1}
-        GTG = Gsub.T @ Gsub
+        GTG = G_sub.T @ G_sub
 
         try:
             GTG_inv = np.linalg.inv(GTG)
@@ -57,7 +65,7 @@ class UncertaintyQuantifier:
             # Heteroskedasticity-consistent (White/Huber) covariance
             # Cov = (G^T G)^{-1} G^T diag(e^2) G (G^T G)^{-1}
             diag_e2 = np.diag(residuals_sub ** 2)
-            middle = Gsub.T @ diag_e2 @ Gsub
+            middle = G_sub.T @ diag_e2 @ G_sub
             cov_matrix = GTG_inv @ middle @ GTG_inv
         else:
             # Standard OLS covariance
@@ -124,6 +132,11 @@ class UncertaintyQuantifier:
         for j in range(p):
             # Regress column j on all other columns
             y_j = Gsub[:, j]
+
+            if np.ptp(y_j) == 0:  # constant (offset) column: VIF undefined
+                vif[j] = np.nan
+                continue
+
             X_j = np.delete(Gsub, j, axis=1)
 
             try:
@@ -150,7 +163,7 @@ class UncertaintyQuantifier:
     @classmethod
     def quantify(cls, G: np.ndarray, residuals: np.ndarray,
                  valid_mask: np.ndarray, coeffs: np.ndarray,
-                 use_hc: bool = False, compute_vif: bool = True) -> UncertaintyResults:
+                 use_hc: bool = False, compute_vif: bool = True, weights=None) -> UncertaintyResults:
         """Complete uncertainty quantification.
 
         Args:
@@ -167,16 +180,23 @@ class UncertaintyQuantifier:
         from scipy.stats import t as t_dist
 
         # Covariance matrix
-        cov_matrix = cls.compute_covariance(G, residuals, valid_mask, use_hc)
+        cov_matrix = cls.compute_covariance(G, residuals, valid_mask, use_hc, weights=weights)
 
         # Standard errors
         se = cls.compute_standard_errors(cov_matrix)
 
         # Confidence intervals (95%)
-        n = np.sum(valid_mask)
+        '''n = np.sum(valid_mask)
         p = G.shape[1]
         dof = max(1, n - p)
-        t_crit = t_dist.ppf(0.975, dof)  # 95% CI
+        t_crit = t_dist.ppf(0.975, dof)  # 95% CI'''
+        mask = valid_mask.copy()
+        if weights is not None:
+            mask &= np.isfinite(weights) & (weights > 0)
+        n = int(np.sum(mask))
+        p = G.shape[1]
+        dof = max(1, n - p)
+        t_crit = t_dist.ppf(0.975, dof)
 
         ci_95 = np.zeros((len(coeffs), 2))
         ci_95[:, 0] = coeffs - t_crit * se

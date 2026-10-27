@@ -192,18 +192,21 @@ class EventCatalog:
 
         # Track events being merged together
         current_merge_group = [sorted_events[0]]
+        group_end = sorted_events[0]['end_day']
 
         for event in sorted_events[1:]:
-            last = current_merge_group[-1]
+            # last = current_merge_group[-1]
 
             # Calculate gap in days
-            gap = (event['start_day'] - last['end_day']).days
+            # gap = (event['start_day'] - last['end_day']).days
+            gap = (event['start_day'] - group_end).days
 
             if gap <= gap_threshold:
                 # Add to current merge group
                 current_merge_group.append(event)
+                group_end = max(group_end, event['end_day'])
                 logger.debug(f"Grouping SSE: gap={gap}d between "
-                             f"{last['start_day'].strftime('%Y-%m-%d')} and "
+                             f"{group_end.strftime('%Y-%m-%d')} and "
                              f"{event['start_day'].strftime('%Y-%m-%d')}")
             else:
                 # Finalize current merge group
@@ -213,8 +216,10 @@ class EventCatalog:
                 # Start new merge group
                 current_merge_group = [event]
 
+                group_end = event['end_day']
+
         # Don't forget the last group!
-        if current_merge_group:
+        if current_merge_group:  # is this 'if' still needed? normally it's never false
             merged_event = EventCatalog._merge_event_group(current_merge_group, merge_strategy)
             merged.append(merged_event)
 
@@ -337,6 +342,18 @@ class EventCatalog:
             else:
                 # Multiple events - keep largest
                 largest = max(events, key=lambda e: e.get('magnitude', 0))
+                # a possible modification to account for antenna changes and EQ in the same day:
+                # _NON_EQ = {'antenna_change', 'equipment_change', 'monument_change'}
+                #
+                # # prefer a real earthquake; tie-break on magnitude
+                # largest = max(
+                #     events,
+                #     key=lambda e: (e.get('event_type', 'earthquake') not in _NON_EQ,
+                #                    e.get('magnitude', 0)),
+                # )
+                # merged_event = largest.copy()
+                # merged_event['merged_types'] = sorted({e.get('event_type', 'earthquake') for e in events})
+                # merged_event['n_merged'] = len(events)
 
                 # Update to use the date (not datetime)
                 merged_event = largest.copy()

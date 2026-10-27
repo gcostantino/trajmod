@@ -28,8 +28,9 @@ class ModelResults:
         rms = np.sqrt(np.mean(residuals[valid] ** 2))
 
         if weights is not None:
-            w = weights[valid]
-            wrms = np.sqrt(np.sum(w * residuals[valid] ** 2) / np.sum(w))
+            w2 = weights[valid] ** 2  # w = weights[valid]
+            # wrms = np.sqrt(np.sum(w * residuals[valid] ** 2) / np.sum(w))
+            wrms = np.sqrt(np.sum(w2 * residuals[valid] ** 2) / np.sum(w2))
         else:
             wrms = rms
 
@@ -52,6 +53,10 @@ class ModelResults:
 
     def summary(self) -> str:
         """Generate summary string."""
+        valid = ~np.isnan(self.residuals)
+        y_obs = (self.fitted + self.residuals)[valid]
+        vr = (1 - np.var(self.residuals[valid]) / np.var(y_obs)) * 100
+
         return f"""
 Model Fit Summary
 ================
@@ -59,5 +64,5 @@ RMS: {self.rms:.3f} mm
 WRMS: {self.wrms:.3f} mm
 Observations: {self.n_observations}
 Parameters: {self.n_parameters}
-Variance Reduction: {(1 - self.rms ** 2 / np.var(self.fitted)) * 100:.1f}%
+Variance Reduction: {vr:.1f}%
         """.strip()
