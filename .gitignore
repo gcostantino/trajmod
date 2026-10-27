@@ -87,3 +87,4 @@ dmypy.json
 *.hdf5
 data/
 outputs/
+*.png
