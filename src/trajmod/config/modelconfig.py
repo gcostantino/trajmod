@@ -47,6 +47,9 @@ class ModelConfig:
             (width = tolerance / 2)
         sse_timing_criterion: 'bic' or 'aic' penalty for accepting a changed timing
         sse_timing_max_rounds: Max coordinate-descent passes over all SSEs
+        sse_timing_allow_overlap: Allow SSEs to overlap each other during timing optimisation
+            (False keeps every SSE between its neighbours)
+
     """
     d_param: Optional[float] = 1.0
     include_seasonal: bool = True
@@ -93,6 +96,7 @@ class ModelConfig:
     sse_timing_prior: bool = True
     sse_timing_criterion: str = 'bic'  # 'bic' or 'aic'
     sse_timing_max_rounds: int = 2
+    sse_timing_allow_overlap: bool = False
 
     def __post_init__(self):
         """Validate configuration parameters."""

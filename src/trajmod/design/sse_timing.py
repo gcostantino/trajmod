@@ -177,8 +177,15 @@ def optimize_sse_timing(t_days: np.ndarray,
             grid = step * np.arange(-K[k], K[k] + 1)
             S_all = s0[k] + grid
             E_all = e0[k] + grid
-            lo_s = max(s0[k] - K[k] * step, min(prev_end, cur_s[k]))
-            hi_e = min(e0[k] + K[k] * step, max(next_start, cur_e[k]))
+            #lo_s = max(s0[k] - K[k] * step, min(prev_end, cur_s[k]))
+            #hi_e = min(e0[k] + K[k] * step, max(next_start, cur_e[k]))
+            if config.sse_timing_allow_overlap:
+                lo_s = s0[k] - K[k] * step
+                hi_e = e0[k] + K[k] * step
+            else:
+                lo_s = max(s0[k] - K[k] * step, min(prev_end, cur_s[k]))
+                hi_e = min(e0[k] + K[k] * step, max(next_start, cur_e[k]))
+
             S_c = S_all[S_all >= lo_s]
             E_c = E_all[E_all <= hi_e]
 
