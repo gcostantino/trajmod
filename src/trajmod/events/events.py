@@ -116,7 +116,7 @@ class EventCatalog:
         self.events = events
         logger.debug(f"EventCatalog created with {len(events)} events")
 
-    @staticmethod
+    '''@staticmethod
     def merge_close_events(events: List[Dict], gap_threshold: int = 5) -> List[Dict]:
         """Merge temporally close SSE events to reduce multicollinearity.
 
@@ -158,6 +158,145 @@ class EventCatalog:
                 merged.append(event.copy())
 
         logger.info(f"Merged SSEs: {len(events)} --> {len(merged)}")
+        return merged'''
+    @staticmethod
+    def merge_close_events(events: List[Dict], gap_threshold: int = 5,
+                           merge_strategy: str = 'largest') -> List[Dict]:
+        """Merge temporally close SSE events to reduce multicollinearity.
+
+        When events are within gap_threshold days, they are merged into a single event
+        spanning the combined time range. Properties are determined by merge_strategy.
+
+        Args:
+            events: List of SSE event dicts with 'start_day', 'end_day', 'magnitude'
+            gap_threshold: Maximum gap (days) between events to trigger merge
+            merge_strategy: How to handle properties when merging:
+                - 'largest': Use properties from event with largest magnitude (default)
+                - 'first': Use properties from earlier event
+                - 'last': Use properties from later event
+                - 'average': Average location/depth (if possible)
+
+        Returns:
+            List of merged SSE events with updated time ranges and durations
+
+        Note:
+            After merging, 'duration' is recalculated to match the merged time span.
+            'area' field (if present) is set to the maximum of merged events.
+        """
+        if not events:
+            return []
+
+        # Sort by start time
+        sorted_events = sorted(events, key=lambda e: e['start_day'])
+        merged = []
+
+        # Track events being merged together
+        current_merge_group = [sorted_events[0]]
+
+        for event in sorted_events[1:]:
+            last = current_merge_group[-1]
+
+            # Calculate gap in days
+            gap = (event['start_day'] - last['end_day']).days
+
+            if gap <= gap_threshold:
+                # Add to current merge group
+                current_merge_group.append(event)
+                logger.debug(f"Grouping SSE: gap={gap}d between "
+                             f"{last['start_day'].strftime('%Y-%m-%d')} and "
+                             f"{event['start_day'].strftime('%Y-%m-%d')}")
+            else:
+                # Finalize current merge group
+                merged_event = EventCatalog._merge_event_group(current_merge_group, merge_strategy)
+                merged.append(merged_event)
+
+                # Start new merge group
+                current_merge_group = [event]
+
+        # Don't forget the last group!
+        if current_merge_group:
+            merged_event = EventCatalog._merge_event_group(current_merge_group, merge_strategy)
+            merged.append(merged_event)
+
+        logger.info(f"Merged SSEs: {len(events)} --> {len(merged)} "
+                    f"(strategy: {merge_strategy})")
+
+        return merged
+    @staticmethod
+    def _merge_event_group(event_group: List[Dict], strategy: str = 'largest') -> Dict:
+        """Merge a group of temporally close SSE events into a single event.
+
+        Args:
+            event_group: List of events to merge (already sorted by time)
+            strategy: How to select properties ('largest', 'first', 'last', 'average')
+
+        Returns:
+            Single merged event dictionary
+        """
+        import copy
+
+        if len(event_group) == 1:
+            # No merging needed - return deep copy
+            return copy.deepcopy(event_group[0])
+
+        # Determine reference event based on strategy
+        if strategy == 'largest':
+            ref_event = max(event_group, key=lambda e: e.get('magnitude', 0))
+        elif strategy == 'first':
+            ref_event = event_group[0]
+        elif strategy == 'last':
+            ref_event = event_group[-1]
+        elif strategy == 'average':
+            ref_event = event_group[0]  # Use first as template
+        else:
+            raise ValueError(f"Unknown merge_strategy: {strategy}")
+
+        # Create merged event (deep copy to avoid reference issues)
+        merged = copy.deepcopy(ref_event)
+
+        # Update time range to span ALL events in group
+        merged['start_day'] = min(e['start_day'] for e in event_group)
+        merged['end_day'] = max(e['end_day'] for e in event_group)
+
+        # Update 'start' and 'end' if present (datetime objects)
+        if 'start' in merged:
+            merged['start'] = min(e['start'] for e in event_group if 'start' in e)
+        if 'end' in merged:
+            merged['end'] = max(e['end'] for e in event_group if 'end' in e)
+
+        # Recalculate duration to match merged time span
+        merged['duration'] = (merged['end_day'] - merged['start_day']).days
+
+        # Handle magnitude (keep maximum or compute combined)
+        magnitudes = [e.get('magnitude', 0) for e in event_group]
+        merged['magnitude'] = max(magnitudes)
+
+        # Handle area (keep maximum)
+        if 'area' in merged:
+            areas = [e.get('area', 0) for e in event_group if 'area' in e]
+            if areas:
+                merged['area'] = max(areas)
+
+        # For 'average' strategy, average the spatial properties
+        if strategy == 'average':
+            import numpy as np
+            if 'lat' in merged:
+                merged['lat'] = np.mean([e['lat'] for e in event_group if 'lat' in e])
+            if 'lon' in merged:
+                merged['lon'] = np.mean([e['lon'] for e in event_group if 'lon' in e])
+            if 'depth' in merged:
+                merged['depth'] = np.mean([e['depth'] for e in event_group if 'depth' in e])
+
+        # Add metadata about merge
+        merged['merged_from'] = len(event_group)
+        merged['merged_ids'] = [e.get('event_id', i) for i, e in enumerate(event_group)]
+
+        logger.debug(f"Merged {len(event_group)} SSEs: "
+                     f"{merged['start_day'].strftime('%Y-%m-%d')} to "
+                     f"{merged['end_day'].strftime('%Y-%m-%d')}, "
+                     f"M{merged['magnitude']:.2f}, "
+                     f"duration={merged['duration']}d")
+
         return merged
 
     @staticmethod
