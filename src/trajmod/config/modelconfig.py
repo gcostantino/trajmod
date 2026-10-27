@@ -34,6 +34,19 @@ class ModelConfig:
         envelope_periods: Extra seasonal periods (days) used when use_envelope_basis
         bspline_knots: Number of knots for B-spline basis
         bspline_degree: Degree of B-spline basis
+
+        SSE timing optimisation (daily data, whole-day shifts):
+        sse_optimize_timing: Optimise SSE start/end times within bounds around the catalog
+        sse_timing_tol_days: Minimum timing tolerance delta_min (days)
+        sse_timing_tol_frac: Tolerance as a fraction of the SSE duration
+        sse_timing_tol_max_days: Maximum timing tolerance delta_max (days)
+            Per-event tolerance = min(max_days, max(tol_days, frac * duration)).
+        sse_min_duration_days: Minimum SSE duration allowed during optimisation (days)
+        sse_timing_step_days: Search step (whole days, >= 1; 1 for daily GNSS)
+        sse_timing_prior: Gaussian prior pulling start/end toward the catalog times
+            (width = tolerance / 2)
+        sse_timing_criterion: 'bic' or 'aic' penalty for accepting a changed timing
+        sse_timing_max_passes: Max coordinate-descent passes over all SSEs
     """
     d_param: Optional[float] = 1.0
     include_seasonal: bool = True
@@ -70,6 +83,17 @@ class ModelConfig:
     bspline_knots: int = 20
     bspline_degree: int = 3
 
+    # SSE timing optimisation (off by default: no change unless requested)
+    sse_optimize_timing: bool = False
+    sse_timing_tol_days: float = 5.0
+    sse_timing_tol_frac: float = 0.25
+    sse_timing_tol_max_days: float = 30.0
+    sse_min_duration_days: int = 1
+    sse_timing_step_days: int = 1
+    sse_timing_prior: bool = True
+    sse_timing_criterion: str = 'bic'  # 'bic' or 'aic'
+    sse_timing_max_passes: int = 2
+
     def __post_init__(self):
         """Validate configuration parameters."""
         if self.d_param is not None and self.d_param <= 0:
@@ -105,3 +129,25 @@ class ModelConfig:
 
         if any(p <= 0 for p in np.atleast_1d(self.envelope_periods)):
             raise ValueError("All envelope_periods must be positive")
+
+        # --- SSE timing optimisation ---
+        if self.sse_timing_tol_days < 0:
+            raise ValueError("sse_timing_tol_days must be non-negative")
+        if self.sse_timing_tol_frac < 0:
+            raise ValueError("sse_timing_tol_frac must be non-negative")
+        if self.sse_timing_tol_max_days < self.sse_timing_tol_days:
+            raise ValueError(
+                "sse_timing_tol_max_days must be >= sse_timing_tol_days "
+                f"({self.sse_timing_tol_max_days} < {self.sse_timing_tol_days})")
+        if int(self.sse_min_duration_days) != self.sse_min_duration_days \
+                or self.sse_min_duration_days < 1:
+            raise ValueError("sse_min_duration_days must be an integer >= 1")
+        if int(self.sse_timing_step_days) != self.sse_timing_step_days \
+                or self.sse_timing_step_days < 1:
+            raise ValueError(
+                "sse_timing_step_days must be an integer >= 1 "
+                "(daily GNSS: whole-day shifts)")
+        if self.sse_timing_criterion not in ('aic', 'bic'):
+            raise ValueError("sse_timing_criterion must be 'aic' or 'bic'")
+        if self.sse_timing_max_passes < 1:
+            raise ValueError("sse_timing_max_passes must be >= 1")
