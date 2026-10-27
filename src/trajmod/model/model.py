@@ -667,6 +667,9 @@ class TrajectoryModel:
                 if dist <= rad:
                     selected.append(evc)
 
+        if self.config.merge_close_sse:
+            selected = EventCatalog.merge_close_events(selected, gap_threshold=self.config.max_overlap_merge_sse)
+
         return selected
 
     def _select_eq_events(self) -> List[Dict]:
