@@ -46,7 +46,7 @@ class ModelConfig:
         sse_timing_prior: Gaussian prior pulling start/end toward the catalog times
             (width = tolerance / 2)
         sse_timing_criterion: 'bic' or 'aic' penalty for accepting a changed timing
-        sse_timing_max_passes: Max coordinate-descent passes over all SSEs
+        sse_timing_max_rounds: Max coordinate-descent passes over all SSEs
     """
     d_param: Optional[float] = 1.0
     include_seasonal: bool = True
@@ -92,7 +92,7 @@ class ModelConfig:
     sse_timing_step_days: int = 1
     sse_timing_prior: bool = True
     sse_timing_criterion: str = 'bic'  # 'bic' or 'aic'
-    sse_timing_max_passes: int = 2
+    sse_timing_max_rounds: int = 2
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -149,5 +149,5 @@ class ModelConfig:
                 "(daily GNSS: whole-day shifts)")
         if self.sse_timing_criterion not in ('aic', 'bic'):
             raise ValueError("sse_timing_criterion must be 'aic' or 'bic'")
-        if self.sse_timing_max_passes < 1:
-            raise ValueError("sse_timing_max_passes must be >= 1")
+        if self.sse_timing_max_rounds < 1:
+            raise ValueError("sse_timing_max_rounds must be >= 1")
