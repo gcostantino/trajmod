@@ -38,7 +38,8 @@ class ModelConfig:
     postseismic_min_step_amplitude: float = 5.0  # mm
 
 
-    merge_close_sse: bool = False
+    merge_close_sse: bool = True
+    max_overlap_merge_sse: int = 5  # days
     merge_earthquakes_same_day: bool = True
     acceleration_term: bool = True
 
