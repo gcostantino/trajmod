@@ -6,6 +6,7 @@ import numpy as np
 
 from trajmod.config.modelconfig import ModelConfig
 from trajmod.design.matrix import DesignMatrixBuilder
+from trajmod.design.sse_timing import optimize_sse_timing
 from trajmod.events.event_selection import EventSelector, KneeEventSelector
 from trajmod.events.events import EventCatalog
 from trajmod.model.results import ModelResults
@@ -74,6 +75,11 @@ class TrajectoryModel:
 
         # Accepted postseismic terms: [{'eq_idx', 'eq_day', 'tau', 'coeff_step', 'coeff_post'}]
         self.post_specs: List[Dict] = []
+
+        # SSE timing optimisation state
+        self._sse_catalog_selected: Optional[List[Dict]] = None  # SSEs as selected from the catalog
+        self._sse_timing_done: bool = False
+        self.sse_timing_report: Optional[Dict] = None
 
         self.G: Optional[np.ndarray] = None
         self.template_names: Optional[List[str]] = None
@@ -544,6 +550,123 @@ class TrajectoryModel:
         return self.G
 
     # ------------------------------------------------------------------ #
+    # SSE timing optimisation
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _post_signature(post_specs: List[Dict]) -> Tuple:
+        """Hashable summary of the postseismic decisions (which EQs, which tau)."""
+        return tuple(sorted((s['eq_idx'], s['tau']) for s in post_specs))
+
+    @staticmethod
+    def _sse_times(events: List[Dict]) -> Tuple:
+        return tuple((e['start_day'], e['end_day']) for e in events)
+
+    def reset_sse_timing(self) -> None:
+        """Go back to the catalog SSE times (and rebuild on the next fit)."""
+        if self._sse_catalog_selected is not None:
+            self.selected_sse = [dict(e) for e in self._sse_catalog_selected]
+        self._sse_catalog_selected = None
+        self._sse_timing_done = False
+        self.sse_timing_report = None
+        self.G = None
+        self.post_specs = []
+
+    def _optimize_sse_timing(self) -> None:
+        """Alternate SSE timing optimisation and postseismic selection.
+
+        Each round:
+          1. build the design matrix with the current SSE times
+             (this also runs the postseismic selection),
+          2. optimise all SSE start/end times against everything that is NOT an SSE
+             (baseline, EQ steps, accepted postseismic terms), always starting from
+             the catalog times, so the tolerance is centred on the catalog,
+          3. stop if the SSE times and the postseismic decisions no longer change.
+        The design matrix is always rebuilt at the end with the final SSE times,
+        which re-runs the postseismic selection and its tau backfitting.
+        """
+        if not self.selected_sse:
+            self.build_design_matrix()
+            self._sse_timing_done = True
+            return
+
+        if self._sse_catalog_selected is None:
+            self._sse_catalog_selected = [dict(e) for e in self.selected_sse]
+        catalog_sse = self._sse_catalog_selected
+
+        max_rounds = int(getattr(self.config, 'sse_timing_max_rounds', 2))
+        weights = self._default_weights()
+
+        templates = TemplateFunctions(self.t_days, self.t0)
+        builder = DesignMatrixBuilder(templates, self.config)
+
+        self.selected_sse = [dict(e) for e in catalog_sse]
+        history = []
+        converged = False
+        built_current = False
+        result = None
+        first_post = None
+
+        for rnd in range(max_rounds):
+            self.build_design_matrix()
+            built_current = True
+            sig = self._post_signature(self.post_specs)
+            if first_post is None:
+                first_post = [dict(s) for s in self.post_specs]
+
+            G_other, _ = builder.build([], self.selected_eq, post_specs=self.post_specs)
+            result = optimize_sse_timing(
+                t_days=self.t_days, t0=self.t0, y=self.y, weights=weights,
+                G_other=G_other, sse_events=catalog_sse, config=self.config)
+
+            new_times = self._sse_times(result.events)
+            changed_sse = new_times != self._sse_times(self.selected_sse)
+            history.append({
+                'round': rnd + 1,
+                'n_moved': result.n_moved,
+                'chi2_catalog': result.chi2_catalog,
+                'chi2_final': result.chi2_final,
+                'delta_ic': result.delta_ic,
+                'post_signature': sig,
+            })
+
+            if not changed_sse:
+                converged = True
+                break
+
+            self.selected_sse = [dict(e) for e in result.events]
+            built_current = False
+
+            # the postseismic decisions for the new SSE times
+            self.build_design_matrix()
+            built_current = True
+            if self._post_signature(self.post_specs) == sig:
+                converged = True
+                break
+
+        if not built_current:
+            self.build_design_matrix()
+
+        if not converged:
+            logger.warning(
+                f"SSE timing / postseismic selection did not converge in {max_rounds} "
+                f"round(s); SSE and postseismic terms may not be separable at this station")
+
+        self._sse_timing_done = True
+        self.sse_timing_report = {
+            'converged': converged,
+            'n_rounds': len(history),
+            'rounds': history,
+            'events': result.report if result is not None else [],
+            'chi2_catalog': result.chi2_catalog if result is not None else None,
+            'chi2_final': result.chi2_final if result is not None else None,
+            'delta_ic': result.delta_ic if result is not None else None,
+            'criterion': self.config.sse_timing_criterion,
+            'post_specs_initial': first_post,
+            'post_specs_final': [dict(s) for s in self.post_specs],
+        }
+
+
+    # ------------------------------------------------------------------ #
     # Event selection from catalogs
     # ------------------------------------------------------------------ #
     def _select_sse_events(self) -> List[Dict]:
@@ -660,6 +783,9 @@ class TrajectoryModel:
             # Event indices changed: force a full rebuild (incl. postseismic selection)
             self.G = None
             self.post_specs = []
+            self._sse_catalog_selected = None
+            self._sse_timing_done = False
+            self.sse_timing_report = None
 
         if plot and hasattr(selector, 'plot_selection'):
             selector.plot_selection(save_path=save_plot)
@@ -702,19 +828,28 @@ class TrajectoryModel:
     # ------------------------------------------------------------------ #
     def fit(self, method: Optional[FittingStrategy] = None,
             weights: Optional[np.ndarray] = None,
-            compute_uncertainty: bool = True) -> ModelResults:
+            compute_uncertainty: bool = True,
+            optimize_sse_timing: Optional[bool] = None) -> ModelResults:
+
         """Fit the trajectory model.
 
         Args:
             method: Fitting strategy (default: OLS)
             weights: Optional observation weights (default 1/sigma)
             compute_uncertainty: Whether to compute uncertainty estimates
+            optimize_sse_timing: Optimise SSE start/end times (None = use config.sse_optimize_timing)
 
         Returns:
             ModelResults object
         """
-        if self.G is None:
+        do_timing = (self.config.sse_optimize_timing if optimize_sse_timing is None
+                     else optimize_sse_timing)
+
+        if do_timing and not self._sse_timing_done:
+            self._optimize_sse_timing()
+        elif self.G is None:
             self.build_design_matrix()
+
 
         fitter = method or OLSFitter()
         weights = self._prepare_weights(weights)
@@ -740,6 +875,7 @@ class TrajectoryModel:
         metadata['method'] = fitter.__class__.__name__
         metadata['uncertainty'] = uncertainty_results
         metadata['post_specs'] = [dict(s) for s in self.post_specs]
+        metadata['sse_timing'] = self.sse_timing_report
 
         self.results = ModelResults.from_fit(
             coeffs=fit_result['coeffs'],
