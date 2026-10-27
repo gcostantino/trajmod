@@ -200,9 +200,15 @@ if __name__ == '__main__':
 
     # Visualize
     viz = TrajectoryVisualizer()
-    viz.plot_fit(model, show_uncertainty=True, save_path='fit.png')
+    viz.plot_fit(model, show_uncertainty=True, show_residuals=True, save_path='fit.png')
+    viz.plot_fit_windowed(model, window_size_years=2., overlap_years=0., save_dir='./windows/')
+
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
     viz.plot_components(model, save_path='components.png')
+    #viz.plot_correlation_matrix(results, save_path='correlation_matrix.png')
+    #viz.plot_acf(results, save_path='acf.png')
+    viz.plot_periodogram(results, save_path='periodogram.png')
+    viz.plot_residuals_vs_fitted(results, save_path='residuals.png')
 
     # Check uncertainty
     if results.metadata['uncertainty']:
