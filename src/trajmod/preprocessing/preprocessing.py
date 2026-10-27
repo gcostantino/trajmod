@@ -43,6 +43,17 @@ class TimeSeriesPreprocessor:
                       uncertainties: np.ndarray,
                       station_lat: float, station_lon: float) -> None:
         """Validate input data."""
+        # Check shapes
+        if y.ndim != 1:
+            raise ValueError(f"y must be 1D array, got shape {y.shape}")
+        if uncertainties.ndim != 1:
+            raise ValueError(f"uncertainties must be 1D array, got shape {uncertainties.shape}")
+
+        # Check lengths
+        if len(t) != len(y) or len(t) != len(uncertainties):
+            raise ValueError(
+                f"Length mismatch: t={len(t)}, y={len(y)}, uncertainties={len(uncertainties)}"
+            )
         if len(t) != len(y) or len(t) != len(uncertainties):
             raise ValueError(f"Array length mismatch")
         if len(t) == 0:
