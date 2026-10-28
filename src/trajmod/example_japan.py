@@ -46,7 +46,7 @@ def build_japan_catalogue_from_nied(min_time=None, max_time=None):
     cat_dates = np.loadtxt(f'/Users/giuseppe/Documents/DATA/SEISMIC_CATALOGS/JAPAN/cat_nied_small.txt',
                            skiprows=1, usecols=(0,), delimiter=" ", dtype=str)
     eq_data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/SEISMIC_CATALOGS/JAPAN/cat_nied_small.txt',
-                           skiprows=1, usecols=(1, 2, 11), delimiter=" ")
+                         skiprows=1, usecols=(1, 2, 11), delimiter=" ")
 
     for i in range(len(cat_dates)):
         year, month, day = cat_dates[i].split(',')[0].split('/')
@@ -57,6 +57,7 @@ def build_japan_catalogue_from_nied(min_time=None, max_time=None):
         eq_list.append({'lat': eq_data[i][0], 'lon': eq_data[i][1], 'date': dtime, 'magnitude': eq_data[i][2]})
 
     return eq_list
+
 
 def ymd_decimal_year_lookup(from_decimal=False):
     import re
@@ -89,11 +90,11 @@ if __name__ == '__main__':
         acceleration_term=True,
     )
 
-    #station_code = 'J214'
-    #station_coordinates = np.array([36.800, 140.754])  # lat lon
+    # station_code = 'J214'
+    # station_coordinates = np.array([36.800, 140.754])  # lat lon
 
-    #station_code = 'J156'
-    #station_coordinates = np.array([40.515, 141.511])  # lat lon
+    # station_code = 'J156'
+    # station_coordinates = np.array([40.515, 141.511])  # lat lon
 
     station_code = 'J550'
     station_coordinates = np.array([38.301, 141.501])  # lat lon
@@ -124,7 +125,8 @@ if __name__ == '__main__':
     sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
 
     step_catalog = [
-        {'date': datetime(*lookup_decimal[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1]]
+        {'date': datetime(*lookup_decimal[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
+        (dcyr > min_time and dcyr < max_time)]
 
     station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
 
@@ -136,8 +138,8 @@ if __name__ == '__main__':
 
     ts = ts * 1000  # mm
 
-    #eq_catalogue = build_japan_catalogue_from_nied()
-    #print('# events in the EQ catalogue', len(eq_catalogue))
+    # eq_catalogue = build_japan_catalogue_from_nied()
+    # print('# events in the EQ catalogue', len(eq_catalogue))
     fetcher = CatalogFetcher()
     '''eq_catalogue = fetcher.fetch_usgs_box(
         minlat=30.0, maxlat=45.0,
@@ -155,7 +157,6 @@ if __name__ == '__main__':
 
     sse_events = None
 
-
     # Create model
     model = TrajectoryModel(
         t=t_dtime, y=ts, sigma_y=unc,
@@ -166,8 +167,8 @@ if __name__ == '__main__':
         config=config
     )
     print(model.G)
-    #selector = KneeEventSelector()
-    #selected = model.select_events(selector, event_type='eq')
+    # selector = KneeEventSelector()
+    # selected = model.select_events(selector, event_type='eq')
 
     '''selector = KneeEventSelector(
         criterion='bic',
@@ -187,10 +188,10 @@ if __name__ == '__main__':
     selected = model.select_events(selector, event_type='eq')
     selector.plot_amplitudes(save_path='event_snr.png')'''
 
-    #knee = KneeEventSelector(criterion='bic', smooth_curve=True, smooth_window=7)
-    #snr = AmplitudeThresholdSelector(threshold=3.0, mode='snr')
+    # knee = KneeEventSelector(criterion='bic', smooth_curve=True, smooth_window=7)
+    # snr = AmplitudeThresholdSelector(threshold=3.0, mode='snr')
 
-    #selector = CompositeEventSelector([knee], mode='intersection')
+    # selector = CompositeEventSelector([knee], mode='intersection')
 
     selector = AmplitudeThresholdSelector(
         threshold=2,  # mm
@@ -208,11 +209,11 @@ if __name__ == '__main__':
     )
     print(selected_indices)
 
-    #original_eq = model.selected_eq.copy()  # Keep backup
-    #model.selected_eq = [original_eq[i] for i in selected_indices]
+    # original_eq = model.selected_eq.copy()  # Keep backup
+    # model.selected_eq = [original_eq[i] for i in selected_indices]
 
-    #fig, axes = selector.plot_amplitudes()
-    #plt.show()
+    # fig, axes = selector.plot_amplitudes()
+    # plt.show()
 
     # model.G = None  # Force rebuild
     print(model.G)
@@ -225,8 +226,8 @@ if __name__ == '__main__':
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
     viz.plot_components(model, save_path='components.png')
-    #viz.plot_correlation_matrix(results, save_path='correlation_matrix.png')
-    #viz.plot_acf(results, save_path='acf.png')
+    # viz.plot_correlation_matrix(results, save_path='correlation_matrix.png')
+    # viz.plot_acf(results, save_path='acf.png')
     viz.plot_periodogram(results, save_path='periodogram.png')
     viz.plot_residuals_vs_fitted(results, save_path='residuals.png')
 
