@@ -65,7 +65,16 @@ if __name__ == '__main__':
     config = ModelConfig(
         d_param=None,
         include_seasonal=True,
-        acceleration_term=False
+        acceleration_term=False,
+
+        sse_optimize_timing=True,
+        #sse_timing_tol_days=20.,  # larger tolerance -> larger shrinking factor
+        sse_timing_prior = False,
+        sse_timing_tol_frac=1.,  # tolerance = 15 d for a 30-d event
+        sse_timing_tol_max_days=120,  # cap, default is fine
+        sse_min_duration_days=1,  # stops it collapsing to a step
+        sse_timing_max_rounds=3,
+        sse_timing_allow_overlap=False
     )
 
     station_code = 'ALBH'
@@ -86,8 +95,6 @@ if __name__ == '__main__':
 
     start_date, end_date = date_lookup[time.min()], date_lookup[time.max()]
     t_dtime = np.array([datetime.datetime(*date_lookup[dcyr]) for dcyr in time])
-
-
 
     station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
 
@@ -128,7 +135,7 @@ if __name__ == '__main__':
 
 
     selector = AmplitudeThresholdSelector(
-        threshold=1.5,  # mm
+        threshold=.5,  # mm
         mode='absolute'
     )
 
@@ -145,6 +152,8 @@ if __name__ == '__main__':
 
     print(model.G)
     results = model.fit(compute_uncertainty=True)
+
+    #print(results.metadata['sse_timing']['events'])
 
     # Visualize
     viz = TrajectoryVisualizer()
