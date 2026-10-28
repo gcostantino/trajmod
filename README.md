@@ -69,19 +69,21 @@ Events are matched by date, so the follower can have a different event set. Even
 
 ### Examples
 
-East-west component of two stations, fitted with the default configuration and the nonlinear SSE timing.
+East-West component of two stations, fitted with the nonlinear SSE timing and non-linear visco-elastic post-seismic relaxation formulation.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/gcostantino/trajmod/refs/heads/main/assets/fit_ALBH.png" alt="Trajectory fit of the E-W component at station ALBH, Cascadia" width="90%">
 </p>
 
-*Example of modeled GNSS position time series for the station ALBH (Cascadia), E-W component.*
+*Example of modeled GNSS position time series for the station ALBH (Cascadia), E-W component. Source code: `example_cascadia.py`.*
+
+&nbsp;
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/gcostantino/trajmod/refs/heads/main/assets/fit_J550.png" alt="Trajectory fit of the E-W component at station J550, Japan" width="90%">
 </p>
 
-*Example of modeled GNSS position time series for the station J550 (Japan), E-W component.*
+*Example of modeled GNSS position time series for the station J550 (Japan), E-W component. Source code: `example_japan.py`.*
 
 
 ## Features
