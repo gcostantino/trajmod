@@ -1,4 +1,5 @@
 """Main TrajectoryModel class - orchestrates all components."""
+import datetime
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -15,7 +16,6 @@ from trajmod.preprocessing.preprocessing import TimeSeriesPreprocessor
 from trajmod.preprocessing.time_utils import DecimalYearConverter
 from trajmod.strategies.fitting import FittingStrategy, OLSFitter
 from trajmod.templates.templates import TemplateFunctions
-import datetime
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
