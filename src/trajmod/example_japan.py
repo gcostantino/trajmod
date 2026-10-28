@@ -42,6 +42,8 @@ if __name__ == '__main__':
 
     min_time, max_time = 2000, 2025
 
+    amplitude_selector = False
+
     # Configure
     config = ModelConfig(
         d_param=.8,
@@ -51,10 +53,21 @@ if __name__ == '__main__':
         postseismic_allow_combined=True,
         postseismic_pair_min_mag=8.5,
         acceleration_term=True,
+
+        tau_grid=[7, 14, 30, 60, 90, 180],
+        tau_grid_exp=[180, 360, 720, 1800],
+
+        sse_optimize_timing=True,
+        # sse_timing_tol_days=20.,  # larger tolerance -> larger shrinking factor
+        sse_timing_prior=False,
+        sse_timing_tol_frac=1.,  # tolerance = 15 d for a 30-d event
+        sse_timing_tol_max_days=120,  # cap, default is fine
+        sse_min_duration_days=3,  # stops it collapsing to a step
+        sse_timing_max_rounds=3,
+        sse_timing_allow_overlap=False,
     )
 
-    date_lookup = ymd_decimal_year_lookup(from_decimal=False)
-    lookup_decimal = ymd_decimal_year_lookup(from_decimal=True)
+    date_lookup = ymd_decimal_year_lookup(from_decimal=True)
 
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_JAPAN/txt_with_unc/{station_code}.txt')
 
@@ -64,8 +77,8 @@ if __name__ == '__main__':
 
     ts, unc = data_enu[:, component], unc_enu[:, component]
 
-    start_date, end_date = lookup_decimal[time.min()], lookup_decimal[time.max()]
-    t_dtime = np.array([datetime.datetime(*lookup_decimal[dcyr]) for dcyr in time])
+    start_date, end_date = date_lookup[time.min()], date_lookup[time.max()]
+    t_dtime = np.array([datetime.datetime(*date_lookup[dcyr]) for dcyr in time])
 
     '''plt.plot(time, ts)
     plt.show()'''
@@ -76,7 +89,7 @@ if __name__ == '__main__':
     sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
 
     step_catalog = [
-        {'date': datetime(*lookup_decimal[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
+        {'date': datetime(*date_lookup[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
         (dcyr > min_time and dcyr < max_time)]
 
     station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
@@ -103,14 +116,22 @@ if __name__ == '__main__':
         start_date="2000-01-01", end_date="2025-12-31",
         min_magnitude=6.0
     )
-
-    sse_events = None
+    # manual selection (temporary) of SSEs along the Japan Trench from visual inspection
+    # I use station latitude and longitude as source location as a temporary option
+    sse_tmp_dates = [(2002.9514, 2003.0034), (2012.0164, 2012.1013), (2021.1198, 2021.1882)]
+    sse_cat = []
+    for i in range(len(sse_tmp_dates)):
+        sse_start, sse_end = sse_tmp_dates[i]  # lat/lon of centroid
+        sse_cat.append({'start': datetime.datetime(*date_lookup[sse_start]),
+                        'end': datetime.datetime(*date_lookup[sse_end]),
+                        'lat': station_lat, 'lon': station_lon, 'magnitude': 6.})  # tmp magnitude
+    print(sse_cat)
 
     # Create model
     model = TrajectoryModel(
         t=t_dtime, y=ts, sigma_y=unc,
         station_lat=station_lat, station_lon=station_lon,
-        sse_catalog=sse_events,
+        sse_catalog=sse_cat,
         eq_catalog=eq_catalogue,
         step_catalog=step_catalog,
         config=config,
@@ -142,22 +163,22 @@ if __name__ == '__main__':
     # snr = AmplitudeThresholdSelector(threshold=3.0, mode='snr')
 
     # selector = CompositeEventSelector([knee], mode='intersection')
+    if amplitude_selector:
+        selector = AmplitudeThresholdSelector(
+            threshold=2,  # mm
+            mode='absolute'
+        )
 
-    selector = AmplitudeThresholdSelector(
-        threshold=2,  # mm
-        mode='absolute'
-    )
+        selected = model.select_events(selector, event_type='eq')
+        selector.plot_amplitudes(save_path='event_snr.png')
 
-    selected = model.select_events(selector, event_type='eq')
-    selector.plot_amplitudes(save_path='event_snr.png')
-
-    selected_indices = model.select_events(
-        selector=selector,
-        event_type='eq',  # or 'eq' for earthquakes
-        plot=True,  # Show diagnostic plots
-        save_plot='selection.png'
-    )
-    print(selected_indices)
+        selected_indices = model.select_events(
+            selector=selector,
+            event_type='eq',  # or 'eq' for earthquakes
+            plot=True,  # Show diagnostic plots
+            save_plot='selection.png'
+        )
+        print(selected_indices)
 
     # original_eq = model.selected_eq.copy()  # Keep backup
     # model.selected_eq = [original_eq[i] for i in selected_indices]
@@ -178,7 +199,7 @@ if __name__ == '__main__':
     viz.plot_fit(model, figsize=(12, 6), show_uncertainty=True, show_residuals=True,
                  show_acf=False, show_histogram=False, show_qq=False,
                  save_path=f'fit_{station_code}.pdf', errorbar_nsigma=1.)
-    viz.plot_fit_windowed(model, window_size_years=2., overlap_years=0., save_dir='./windows/')
+    viz.plot_fit_windowed(model, window_size_years=1., overlap_years=0., save_dir='./windows/')
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
     viz.plot_components(model, save_path='components.png')
