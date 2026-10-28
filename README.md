@@ -3,7 +3,7 @@
 </p>
 
 ---
-**Simple GNSS time series Trajectory Modeling**
+**The simple non-linear GNSS time series trajectory model**
 
 [![PyPI version](https://img.shields.io/pypi/v/trajmod)](https://pypi.org/project/trajmod/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
