@@ -83,6 +83,13 @@ if __name__ == '__main__':
 
     date_lookup = ymd_decimal_year_lookup(from_decimal=True)
 
+    steps = np.loadtxt('/Users/giuseppe/Documents/DATA/GNSS/NGL_info/steps.txt', dtype=str, usecols=(0, 1, 2, 3))
+    sta_steps = steps[steps[:, 0] == station_code]
+    sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
+
+    step_catalog = [
+        {'date': datetime(*date_lookup[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
+        (dcyr > min_time and dcyr < max_time)]
 
     component = 0
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.txt')
@@ -129,6 +136,7 @@ if __name__ == '__main__':
         station_lat=station_lat, station_lon=station_lon,
         sse_catalog=sse_cat,
         eq_catalog=eq_catalogue,
+        step_catalog=step_catalog,
         config=config
     )
     print(model.G)
