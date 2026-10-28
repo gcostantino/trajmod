@@ -1,4 +1,4 @@
-"""trajmod: Simple GNSS trajectory modeling.
+"""trajmod: the simple non-linear GNSS time series trajectory model.
 
 A Python library for modeling GNSS displacement time series with support for
 earthquakes, slow slip events, and advanced multi-tier postseismic filtering.
