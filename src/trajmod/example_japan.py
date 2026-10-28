@@ -1,44 +1,12 @@
-"""
+import datetime
 
-# === KNEE SELECTOR (Enhanced) ===
-selector = KneeEventSelector(
-    criterion='bic',       # 'aic', 'bic', or 'ssr'
-    smooth_curve=True,     # Smooth noisy curves
-    min_amplitude=2.0      # Filter small events
-)
-
-# === AMPLITUDE THRESHOLD ===
-selector = AmplitudeThresholdSelector(
-    threshold=3.0,         # Threshold value
-    mode='snr'             # 'absolute', 'relative', or 'snr'
-)
-
-# === LASSO ===
-selector = LassoEventSelector(cv=5)
-
-# === MARGINAL SCREENING ===
-selector = MarginalScreeningSelector(alpha=0.05, use_fdr=True)
-
-# === COMPOSITE ===
-selector = CompositeEventSelector(
-    [selector1, selector2],
-    mode='intersection'    # 'intersection' (AND) or 'union' (OR)
-)
-
-# === USE ANY SELECTOR ===
-selected = model.select_events(selector, event_type='sse', plot=True)
-
-
-"""
-import matplotlib.pyplot as plt
+import numpy as np
 
 from trajmod.events import CatalogFetcher
 from trajmod.events.amplitude_threshold_selector import AmplitudeThresholdSelector
 from trajmod.model.model import TrajectoryModel, ModelConfig
-from trajmod.events.event_selection import KneeEventSelector, LassoEventSelector, CompositeEventSelector
+from trajmod.model.nonlinear_prior import save_prior, load_prior
 from trajmod.visualization import TrajectoryVisualizer
-import numpy as np
-import datetime
 
 
 def build_japan_catalogue_from_nied(min_time=None, max_time=None):
@@ -79,17 +47,8 @@ def ymd_decimal_year_lookup(from_decimal=False):
 
 
 if __name__ == '__main__':
-    # Configure
-    config = ModelConfig(
-        d_param=.8,
-        include_seasonal=True,
-        postseismic_mag_threshold=8.5,
-        postseismic_models=['log', 'exp'],
-        postseismic_allow_combined=True,
-        postseismic_pair_min_mag=8.5,
-        acceleration_term=True,
-    )
 
+    component = 0
     # station_code = 'J214'
     # station_coordinates = np.array([36.800, 140.754])  # lat lon
 
@@ -101,10 +60,20 @@ if __name__ == '__main__':
 
     min_time, max_time = 1995, 2011
 
+    # Configure
+    config = ModelConfig(
+        d_param=.8,
+        include_seasonal=True,
+        postseismic_mag_threshold=8.5,
+        postseismic_models=['log', 'exp'],
+        postseismic_allow_combined=True,
+        postseismic_pair_min_mag=8.5,
+        acceleration_term=True,
+    )
+
     date_lookup = ymd_decimal_year_lookup(from_decimal=False)
     lookup_decimal = ymd_decimal_year_lookup(from_decimal=True)
 
-    component = 0
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_JAPAN/txt_with_unc/{station_code}.txt')
 
     time, data_enu, unc_enu = data[:, 0], data[:, 1:4], data[:, 4:]
@@ -136,7 +105,7 @@ if __name__ == '__main__':
     ts = ts[time_filter]
     unc = unc[time_filter]
 
-    ts = ts * 1000  # mm
+    ts, unc = ts * 1000, unc * 1000  # mm
 
     # eq_catalogue = build_japan_catalogue_from_nied()
     # print('# events in the EQ catalogue', len(eq_catalogue))
@@ -164,7 +133,8 @@ if __name__ == '__main__':
         sse_catalog=sse_events,
         eq_catalog=eq_catalogue,
         step_catalog=step_catalog,
-        config=config
+        config=config,
+        nonlinear_prior=None if component == 0 else load_prior(f'{station_code}_prior.json')
     )
     print(model.G)
     # selector = KneeEventSelector()
@@ -219,9 +189,15 @@ if __name__ == '__main__':
     print(model.G)
     results = model.fit(compute_uncertainty=True)
 
+    if component == 0:
+        prior = model.export_nonlinear()
+        save_prior(prior, f'{station_code}_prior.json')
+
     # Visualize
     viz = TrajectoryVisualizer()
-    viz.plot_fit(model, show_uncertainty=True, show_residuals=True, save_path='fit.png')
+    viz.plot_fit(model, figsize=(12, 6), show_uncertainty=True, show_residuals=True,
+                 show_acf=False, show_histogram=False, show_qq=False,
+                 save_path=f'fit_{station_code}.pdf', errorbar_nsigma=1.)
     viz.plot_fit_windowed(model, window_size_years=2., overlap_years=0., save_dir='./windows/')
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
