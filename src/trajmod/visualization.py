@@ -2,6 +2,7 @@
 import logging
 from typing import Optional, List, Tuple
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -10,216 +11,6 @@ logger = logging.getLogger(__name__)
 
 class TrajectoryVisualizer:
     """Comprehensive visualization for trajectory models."""
-
-    '''@staticmethod
-    def plot_fit(model, figsize: Tuple[int, int] = (14, 10),
-                 save_path: Optional[str] = None, show_uncertainty: bool = True,
-                 show_residuals: bool = True):
-        """Plot comprehensive model fit diagnostics.
-
-        Args:
-            model: Fitted TrajectoryModel instance
-            figsize: Figure size
-            save_path: Path to save figure
-            show_uncertainty: Whether to show uncertainty bands
-        """
-        if model.results is None:
-            raise ValueError("Model must be fit before plotting")
-
-        fig = plt.figure(figsize=figsize)
-        gs = fig.add_gridspec(4, 2, hspace=0.3, wspace=0.3)
-
-        # Main plot: Data + Fit
-        ax1 = fig.add_subplot(gs[0:2, :])
-        valid = ~np.isnan(model.y)
-        ax1.plot(model.t[valid], model.y[valid], 'k.', alpha=0.3,
-                 label='Data', markersize=2)
-        ax1.plot(model.t, model.results.fitted, 'r-',
-                 label='Fit', linewidth=1.5)
-
-        if show_uncertainty and hasattr(model.results.metadata, 'uncertainty'):
-            unc = model.results.metadata['uncertainty']
-            if unc is not None and hasattr(unc, 'standard_errors'):
-                # Plot prediction bands (approximate)
-                pass  # Would need prediction variance
-
-        ax1.set_ylabel('Displacement (mm)', fontsize=12)
-        ax1.set_title(f'Trajectory Fit - RMS: {model.results.rms:.2f} mm, '
-                      f'WRMS: {model.results.wrms:.2f} mm', fontsize=14, fontweight='bold')
-        ax1.legend(loc='best')
-        ax1.grid(True, alpha=0.3)
-
-        # Residuals time series
-        if show_residuals:
-            ax2 = fig.add_subplot(gs[2, :])
-            ax2.plot(model.t, model.results.residuals, 'k.', alpha=0.5, markersize=2)
-            ax2.axhline(0, color='r', linestyle='--', linewidth=1)
-            ax2.axhline(3 * model.results.rms, color='orange', linestyle=':',
-                        linewidth=1, alpha=0.7, label='±3σ')
-            ax2.axhline(-3 * model.results.rms, color='orange', linestyle=':',
-                        linewidth=1, alpha=0.7)
-            # add detected events
-            for eq in model.selected_eq:
-                ax2.axvline(eq['eq_day'], color='red', alpha=0.3, linestyle='--')
-            for sse in model.selected_sse:
-                ax2.axvspan(sse['start'], sse['end'], alpha=0.2, color='blue')
-
-            ax2.set_xlabel('Time', fontsize=12)
-            ax2.set_ylabel('Residuals (mm)', fontsize=12)
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-
-        # Residual histogram
-        ax3 = fig.add_subplot(gs[3, 0])
-        residuals_valid = model.results.residuals[~np.isnan(model.results.residuals)]
-        ax3.hist(residuals_valid, bins=50, density=True, alpha=0.7,
-                 color='steelblue', edgecolor='black')
-
-        # Overlay normal distribution
-        mu, sigma = 0, model.results.rms
-        x = np.linspace(residuals_valid.min(), residuals_valid.max(), 100)
-        ax3.plot(x, 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
-                 'r-', linewidth=2, label='N(0, σ²)')
-        ax3.set_xlabel('Residuals (mm)', fontsize=10)
-        ax3.set_ylabel('Density', fontsize=10)
-        ax3.set_title('Residual Distribution', fontsize=11)
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-
-        # Q-Q plot
-        ax4 = fig.add_subplot(gs[3, 1])
-        from scipy.stats import probplot
-        probplot(residuals_valid, dist="norm", plot=ax4)
-        ax4.set_title('Q-Q Plot', fontsize=11)
-        ax4.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Saved fit plot to {save_path}")
-
-        return fig'''
-
-    '''@staticmethod
-    def plot_fit(model, figsize: Tuple[int, int] = (14, 12),
-                 save_path: Optional[str] = None, show_uncertainty: bool = True,
-                 show_residuals: bool = True, label_position:Optional[str]='parallel'):
-        """Plot comprehensive model fit diagnostics with event markers."""
-        if model.results is None:
-            raise ValueError("Model must be fit before plotting")
-
-        fig = plt.figure(figsize=figsize)
-        gs = fig.add_gridspec(5, 2, hspace=0.35, wspace=0.3)
-
-        # ========================================================================
-        # Row 0-1: Main plot (Data + Fit) WITH EVENT MARKERS
-        # ========================================================================
-        ax1 = fig.add_subplot(gs[0:2, :])
-        valid = ~np.isnan(model.y)
-        ax1.plot(model.t[valid], model.y[valid], 'k.', alpha=0.3,
-                 label='Data', markersize=2)
-        ax1.plot(model.t, model.results.fitted, 'r-',
-                 label='Fit', linewidth=1.5)
-
-        # Add event markers
-        TrajectoryVisualizer._add_event_markers_to_axis(ax1, model, show_labels=True, label_position=label_position)
-
-        ax1.set_ylabel('Displacement (mm)', fontsize=12)
-        ax1.set_title(f'Trajectory Fit - RMS: {model.results.rms:.2f} mm, '
-                      f'WRMS: {model.results.wrms:.2f} mm',
-                      fontsize=14, fontweight='bold')
-        ax1.legend(loc='best', fontsize=9)
-        ax1.grid(True, alpha=0.3)
-
-        # ========================================================================
-        # Row 2: Residuals time series WITH EVENT MARKERS
-        # ========================================================================
-        ax2 = fig.add_subplot(gs[2, :])
-        ax2.plot(model.t, model.results.residuals, 'k.', alpha=0.5, markersize=2)
-        ax2.axhline(0, color='r', linestyle='--', linewidth=1)
-        ax2.axhline(3 * model.results.rms, color='orange', linestyle=':',
-                    linewidth=1, alpha=0.7, label='±3σ')
-        ax2.axhline(-3 * model.results.rms, color='orange', linestyle=':',
-                    linewidth=1, alpha=0.7)
-
-        # Add event markers (no labels in residuals to avoid clutter)
-        TrajectoryVisualizer._add_event_markers_to_axis(ax2, model, show_labels=False, label_position=None)
-
-        ax2.set_ylabel('Residuals (mm)', fontsize=11)
-        ax2.set_title('Residuals vs Time', fontsize=11, fontweight='bold')
-        ax2.legend(loc='upper right', fontsize=9)
-        ax2.grid(True, alpha=0.3)
-
-        # ========================================================================
-        # Row 3: Autocorrelation Function (ACF)
-        # ========================================================================
-        ax3 = fig.add_subplot(gs[3, :])
-        residuals_clean = model.results.residuals[~np.isnan(model.results.residuals)]
-
-        max_lag = min(50, len(residuals_clean) // 4)
-        lags = range(max_lag + 1)
-        acf = []
-
-        for lag in lags:
-            if lag == 0:
-                acf.append(1.0)
-            else:
-                r1 = residuals_clean[:-lag]
-                r2 = residuals_clean[lag:]
-                if len(r1) > 0:
-                    acf.append(np.corrcoef(r1, r2)[0, 1])
-                else:
-                    acf.append(0.0)
-
-        ax3.stem(lags, acf, basefmt=' ', linefmt='steelblue', markerfmt='o')
-        ax3.axhline(0, color='k', linestyle='-', linewidth=0.5)
-
-        # 95% confidence interval
-        conf = 1.96 / np.sqrt(len(residuals_clean))
-        ax3.axhline(conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
-        ax3.axhline(-conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
-        ax3.fill_between(lags, -conf, conf, alpha=0.2, color='red')
-
-        ax3.set_xlabel('Lag (days)', fontsize=11)
-        ax3.set_ylabel('Autocorrelation', fontsize=11)
-        ax3.set_title('Residual Autocorrelation (should be within red bands)',
-                      fontsize=11, fontweight='bold')
-        ax3.grid(alpha=0.3)
-        ax3.set_ylim([-1, 1])
-
-        # ========================================================================
-        # Row 4: Left - Histogram, Right - Q-Q Plot
-        # ========================================================================
-        ax4 = fig.add_subplot(gs[4, 0])
-        ax4.hist(residuals_clean, bins=50, density=True, alpha=0.7,
-                 color='steelblue', edgecolor='black')
-
-        # Overlay normal distribution
-        mu, sigma = 0, model.results.rms
-        x = np.linspace(residuals_clean.min(), residuals_clean.max(), 100)
-        ax4.plot(x, 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
-                 'r-', linewidth=2, label='N(0, σ²)')
-        ax4.set_xlabel('Residuals (mm)', fontsize=10)
-        ax4.set_ylabel('Density', fontsize=10)
-        ax4.set_title('Residual Distribution', fontsize=11, fontweight='bold')
-        ax4.legend(fontsize=9)
-        ax4.grid(True, alpha=0.3)
-
-        # Q-Q plot
-        ax5 = fig.add_subplot(gs[4, 1])
-        from scipy.stats import probplot
-        probplot(residuals_clean, dist="norm", plot=ax5)
-        ax5.set_title('Q-Q Plot (Normality Check)', fontsize=11, fontweight='bold')
-        ax5.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Saved fit plot to {save_path}")
-
-        return fig'''
 
     @staticmethod
     def plot_fit(model, figsize: Tuple[int, int] = (14, 12),
@@ -570,7 +361,7 @@ class TrajectoryVisualizer:
             show_labels: Whether to show magnitude labels
             label_position: 'top' (horizontal on top) or 'parallel' (along line)
         """
-        ylim = ax.get_ylim()
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
         y_range = ylim[1] - ylim[0]
 
         # ========================================================================
@@ -657,6 +448,30 @@ class TrajectoryVisualizer:
                             rotation=90, ha='right', va='bottom',
                             fontsize=10, color=label_color,
                             fontweight='bold')
+
+        # ========================================================================
+        # 2b. Plot non-earthquake steps (antenna, equipment, ...) from step_catalog
+        # ========================================================================
+        for st in getattr(model, 'selected_steps', []):
+            st_time = st['step_day']
+            if not (xlim[0] <= mdates.date2num(st_time) <= xlim[1]):
+                continue  # outside the plotted window; axvline would stretch the x-axis
+
+            label_text = str(st.get('event_type', 'step')).replace('_', ' ')
+            ax.axvline(st_time, color='gray', linestyle=':', linewidth=1.5,
+                       alpha=0.6, zorder=2)
+
+            if show_labels:
+                if label_position == 'top':
+                    ax.text(st_time, ylim[1] - 0.02 * y_range, label_text,
+                            rotation=0, ha='center', va='top',
+                            fontsize=7, color='gray', fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                                      edgecolor='gray', alpha=0.8, linewidth=1))
+                elif label_position == 'parallel':
+                    ax.text(st_time, ylim[0] + 0.1 * y_range, label_text,
+                            rotation=90, ha='right', va='bottom',
+                            fontsize=10, color='gray', fontweight='bold')
 
         # ========================================================================
         # 3. Plot SSEs (keep as bands)
@@ -746,7 +561,8 @@ class TrajectoryVisualizer:
             raise ValueError("Model must be fit before plotting")
 
         if components is None:
-            components = ['baseline', 'seasonal', 'sse', 'eq']
+            components = ['baseline', 'seasonal', 'sse', 'eq'] + (
+                ['step'] if getattr(model, 'selected_steps', None) else [])
 
         n_components = len(components)
         fig, axes = plt.subplots(n_components + 1, 1, figsize=figsize, sharex=True)
@@ -789,6 +605,10 @@ class TrajectoryVisualizer:
                     if name_lower.startswith('eq_'):
                         indices.append(j)
 
+                elif comp_type == 'step':
+                    if name_lower.startswith('step_'):
+                        indices.append(j)
+
             if not indices:
                 axes[i].text(0.5, 0.5, f'No {comp_type} components',
                              ha='center', va='center', transform=axes[i].transAxes,
@@ -807,7 +627,8 @@ class TrajectoryVisualizer:
                 'baseline': 'steelblue',
                 'seasonal': 'green',
                 'sse': 'orange',
-                'eq': 'purple'
+                'eq': 'purple',
+                'step': 'gray'
             }
 
             axes[i].plot(model.t, signal_comp, linewidth=1.5,
@@ -928,7 +749,6 @@ class TrajectoryVisualizer:
     def plot_acf(results, figsize: Tuple[int, int] = (10, 4),
                  max_lag=50, save_path: Optional[str] = None):
         """Plot autocorrelation of residuals."""
-        from scipy.stats import pearsonr
         residuals = results.residuals
         residuals_clean = residuals[~np.isnan(residuals)]
 
