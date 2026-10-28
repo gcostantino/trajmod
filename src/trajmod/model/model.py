@@ -15,6 +15,7 @@ from trajmod.preprocessing.preprocessing import TimeSeriesPreprocessor
 from trajmod.preprocessing.time_utils import DecimalYearConverter
 from trajmod.strategies.fitting import FittingStrategy, OLSFitter
 from trajmod.templates.templates import TemplateFunctions
+import datetime
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +36,8 @@ class TrajectoryModel:
                  eq_catalog: Optional[List[Dict]] = None,
                  config: Optional[ModelConfig] = None,
                  time_converter: Optional[DecimalYearConverter] = None,
-                 validate_catalogs: bool = True):
+                 validate_catalogs: bool = True,
+                 step_catalog: Optional[List[Dict]] = None):
         """Initialize trajectory model.
 
         Args:
@@ -49,6 +51,8 @@ class TrajectoryModel:
             config: Model configuration
             time_converter: Optional time converter
             validate_catalogs: Optional flag to validate sse_catalog and eq_catalog
+            step_catalog: Station-specific non-earthquake steps (antenna, equipment, ...);
+                never filtered by distance, never given postseismic terms, never pruned unless requested
         """
         self.config = config or ModelConfig()
         self.time_converter = time_converter or DecimalYearConverter.from_algorithm()
@@ -66,12 +70,19 @@ class TrajectoryModel:
 
         self.sse_catalog = sse_catalog or []
         self.eq_catalog = eq_catalog or []
+        self.step_catalog = step_catalog or []
 
         if validate_catalogs:
             self._validate_catalogs()
 
         self.selected_sse = self._select_sse_events()
         self.selected_eq = self._select_eq_events()
+        legacy = [e for e in self.eq_catalog
+                  if e.get('event_type', 'earthquake') in _NON_EQ_TYPES]
+        if legacy:
+            logger.warning(f"{len(legacy)} non-earthquake event(s) found in eq_catalog; "
+                           f"move them to step_catalog")
+        self.selected_steps = self._select_step_events()
 
         # Accepted postseismic terms: [{'eq_idx', 'eq_day', 'tau', 'coeff_step', 'coeff_post'}]
         self.post_specs: List[Dict] = []
@@ -86,7 +97,7 @@ class TrajectoryModel:
         self.results: Optional[ModelResults] = None
 
         logger.info(f"Initialized model: {len(self.t)} time points, "
-                    f"{len(self.selected_sse)} SSEs, {len(self.selected_eq)} EQs")
+                    f"{len(self.selected_sse)} SSEs, {len(self.selected_eq)} EQs, {len(self.selected_steps)} steps")
 
     # ------------------------------------------------------------------ #
     # Catalog validation
@@ -507,12 +518,13 @@ class TrajectoryModel:
         self.post_specs = []
 
         if not self.config.fit_postseismic_decay:
-            self.G, self.template_names = builder.build(self.selected_sse, self.selected_eq)
+            self.G, self.template_names = builder.build(self.selected_sse, self.selected_eq,
+                                                        selected_steps=self.selected_steps)
             logger.info(f"Postseismic disabled, final matrix: {self.G.shape}")
             return self.G
 
         # Step 1: baseline + SSE + EQ steps (no postseismic)
-        G_baseline, names_baseline = builder.build_baseline(self.selected_sse, self.selected_eq)
+        G_baseline, names_baseline = builder.build_baseline(self.selected_sse, self.selected_eq, self.selected_steps)
         logger.info(f"Baseline design matrix: {G_baseline.shape[0]} x {G_baseline.shape[1]}")
 
         # Step 2: baseline fit (weighted chi-square and step coefficients)
@@ -601,8 +613,8 @@ class TrajectoryModel:
 
         # Step 6: final assembly through the shared path
         self.post_specs = post_specs
-        self.G, self.template_names = builder.build(
-            self.selected_sse, self.selected_eq, post_specs=post_specs)
+        self.G, self.template_names = builder.build(self.selected_sse, self.selected_eq, post_specs=post_specs,
+                                                    selected_steps=self.selected_steps)
 
         logger.info(f"Final design matrix: {self.G.shape[0]} x {self.G.shape[1]} "
                     f"({len(post_specs)}/{len(candidates)} postseismic)")
@@ -672,7 +684,8 @@ class TrajectoryModel:
             if first_post is None:
                 first_post = [dict(s) for s in self.post_specs]
 
-            G_other, _ = builder.build([], self.selected_eq, post_specs=self.post_specs)
+            G_other, _ = builder.build([], self.selected_eq, post_specs=self.post_specs,
+                                       selected_steps=self.selected_steps)
             result = optimize_sse_timing(
                 t_days=self.t_days, t0=self.t0, y=self.y, weights=weights,
                 G_other=G_other, sse_events=catalog_sse, config=self.config)
@@ -784,6 +797,51 @@ class TrajectoryModel:
 
         return selected
 
+    def _select_step_events(self) -> List[Dict]:
+        """Station-specific non-earthquake steps: time-range filter only.
+
+        No distance filter, no magnitude, no postseismic. Exact duplicates (same day and
+        same label) are dropped; different labels on the same day each keep their column.
+        """
+        selected, seen = [], set()
+        t_min, t_max = self.t.min(), self.t.max()
+        for ev in self.step_catalog:
+            day = ev.get('date') or ev.get('time') or ev.get('step_day')
+            if day is None:
+                logger.warning(f"Skipping step without date: {ev}")
+                continue
+            if isinstance(day, np.datetime64):
+                day = day.astype('datetime64[s]').astype(datetime.datetime)
+
+            if day <= t_min or day > t_max:
+                logger.debug(f"Skipping step outside time range: {day}")
+                continue
+
+            label = ev.get('event_type', 'step')
+            key = (day.date(), label)
+            if key in seen:
+                logger.warning(f"Duplicate step '{label}' on {day.date()} dropped")
+                continue
+            seen.add(key)
+
+            evc = dict(ev)
+            evc['step_day'] = day
+            evc['event_type'] = label
+            selected.append(evc)
+
+        selected.sort(key=lambda e: e['step_day'])
+
+        days = {}
+        for e in selected:
+            days.setdefault(e['step_day'].date(), []).append(e['event_type'])
+        eq_days = {(eq.get('eq_day') or eq.get('date')).date()
+                   for eq in self.selected_eq if (eq.get('eq_day') or eq.get('date')) is not None}
+        for d, labels in days.items():
+            if len(labels) > 1 or d in eq_days:
+                logger.warning(f"Step(s) {labels} on {d} share a day with another step or an "
+                               f"earthquake: identical columns, amplitudes not separable")
+        return selected
+
     # ------------------------------------------------------------------ #
     # Event pruning
     # ------------------------------------------------------------------ #
@@ -795,7 +853,7 @@ class TrajectoryModel:
 
         Args:
             selector: EventSelector instance
-            event_type: 'sse' or 'eq'
+            event_type: 'sse', 'eq' or 'step'
 
         Returns:
             List of selected event indices
@@ -811,13 +869,24 @@ class TrajectoryModel:
         G_baseline = (np.column_stack(baseline_cols) if baseline_cols
                       else np.empty((len(self.t_days), 0)))
 
-        event_catalog = self.selected_sse if event_type == 'sse' else self.selected_eq
+        if event_type not in ('sse', 'eq', 'step'):
+            raise ValueError("event_type must be 'sse', 'eq' or 'step'")
+        if event_type == 'sse':
+            event_catalog = self.selected_sse
+        elif event_type == 'step':
+            event_catalog = self.selected_steps
+        else:
+            event_catalog = self.selected_eq
+
         event_templates_list = []
 
         for i, ev in enumerate(event_catalog):
             if event_type == 'sse':
                 template = templates.raised_cosine(ev['start_day'], ev['end_day'])
                 name = f"SSE_{i}"
+            elif event_type == 'step':
+                template = templates.step(ev['step_day'])
+                name = f"STEP_{i}"
             else:
                 template = templates.step(ev['eq_day'])
                 name = f"EQ_{i}"
@@ -833,6 +902,10 @@ class TrajectoryModel:
                 original_count = len(self.selected_sse)
                 self.selected_sse = [self.selected_sse[i] for i in selected_indices]
                 logger.info(f"Updated SSE catalog: {original_count} -> {len(self.selected_sse)} events")
+            elif event_type == 'step':
+                original_count = len(self.selected_steps)
+                self.selected_steps = [self.selected_steps[i] for i in selected_indices]
+                logger.info(f"Updated step catalog: {original_count} -> {len(self.selected_steps)} events")
             else:
                 original_count = len(self.selected_eq)
                 self.selected_eq = [self.selected_eq[i] for i in selected_indices]
@@ -982,7 +1055,7 @@ class TrajectoryModel:
         templates_pred = TemplateFunctions(t_days_pred, self.t0)
         builder = DesignMatrixBuilder(templates_pred, self.config)
         G_pred, names_pred = builder.build(
-            self.selected_sse, self.selected_eq, post_specs=self.post_specs)
+            self.selected_sse, self.selected_eq, post_specs=self.post_specs, selected_steps=self.selected_steps)
 
         if G_pred.shape[1] != len(self.results.coeffs):
             raise ValueError(

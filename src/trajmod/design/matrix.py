@@ -18,6 +18,7 @@ class DesignMatrixBuilder:
 
     Column order (stable, relied upon by name-based lookups):
         offset, trend, [acceleration], [seasonal terms], SSE_*, EQ_*_step, EQ_*_log_tau*
+        offset, trend, [acceleration], [seasonal], SSE_*, EQ_*_step, STEP_*, EQ_*_log_tau*
     """
 
     def __init__(self, templates: TemplateFunctions, config: ModelConfig):
@@ -31,7 +32,8 @@ class DesignMatrixBuilder:
     def build(self,
               selected_sse: List[Dict],
               selected_eq: List[Dict],
-              post_specs: Optional[List[Dict]] = None) -> Tuple[np.ndarray, List[str]]:
+              post_specs: Optional[List[Dict]] = None,
+              selected_steps: Optional[List[Dict]] = None) -> Tuple[np.ndarray, List[str]]:
         """Build the complete design matrix.
 
         Args:
@@ -46,7 +48,7 @@ class DesignMatrixBuilder:
             (G, template_names)
         """
         self.template_names = []
-        columns = self.build_baseline_columns(selected_sse, selected_eq)
+        columns = self.build_baseline_columns(selected_sse, selected_eq, selected_steps)
 
         if post_specs:
             columns.extend(self._build_postseismic_templates(post_specs))
@@ -57,7 +59,8 @@ class DesignMatrixBuilder:
 
     def build_baseline_columns(self,
                                selected_sse: List[Dict],
-                               selected_eq: List[Dict]) -> List[np.ndarray]:
+                               selected_eq: List[Dict],
+                               selected_steps: Optional[List[Dict]] = None) -> List[np.ndarray]:
         """Baseline + SSE + EQ steps (no postseismic).
 
         Resets template_names and fills it with the names of the returned columns.
@@ -69,13 +72,15 @@ class DesignMatrixBuilder:
             columns.extend(self._build_seasonal())
         columns.extend(self._build_sse_templates(selected_sse))
         columns.extend(self._build_earthquake_templates(selected_eq))
+        columns.extend(self._build_step_templates(selected_steps))
         return columns
 
     def build_baseline(self,
                        selected_sse: List[Dict],
-                       selected_eq: List[Dict]) -> Tuple[np.ndarray, List[str]]:
+                       selected_eq: List[Dict],
+                       selected_steps: Optional[List[Dict]] = None) -> Tuple[np.ndarray, List[str]]:
         """Same as build() without postseismic terms, returned as (G, names)."""
-        columns = self.build_baseline_columns(selected_sse, selected_eq)
+        columns = self.build_baseline_columns(selected_sse, selected_eq, selected_steps)
         return self._stack(columns), list(self.template_names)
 
     def make_postseismic_column(self, eq_day, tau: float, kind: str = 'log') -> np.ndarray:
@@ -166,6 +171,20 @@ class DesignMatrixBuilder:
             eq_str = eq_date.strftime('%Y-%m-%d')
             self.template_names.append(f'EQ_{i}_{eq_str}_step')
         return columns
+
+    @staticmethod
+    def step_name(i: int, ev: Dict) -> str:
+        """Canonical name of a non-earthquake step column (no underscores inside the label)."""
+        label = str(ev.get('event_type', 'step')).replace('_', '-').replace(' ', '-')
+        return f"STEP_{i}_{ev['step_day'].strftime('%Y-%m-%d')}_{label}"
+
+    def _build_step_templates(self, selected_steps: Optional[List[Dict]]) -> List[np.ndarray]:
+        columns = []
+        for i, ev in enumerate(selected_steps or []):
+            columns.append(self.templates.step(ev['step_day']))
+            self.template_names.append(self.step_name(i, ev))
+        return columns
+
 
     def _build_postseismic_templates(self, post_specs: List[Dict]) -> List[np.ndarray]:
         columns = []
