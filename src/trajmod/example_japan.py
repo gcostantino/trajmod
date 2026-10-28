@@ -9,24 +9,6 @@ from trajmod.model.nonlinear_prior import save_prior, load_prior
 from trajmod.visualization import TrajectoryVisualizer
 
 
-def build_japan_catalogue_from_nied(min_time=None, max_time=None):
-    eq_list = []
-    cat_dates = np.loadtxt(f'/Users/giuseppe/Documents/DATA/SEISMIC_CATALOGS/JAPAN/cat_nied_small.txt',
-                           skiprows=1, usecols=(0,), delimiter=" ", dtype=str)
-    eq_data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/SEISMIC_CATALOGS/JAPAN/cat_nied_small.txt',
-                         skiprows=1, usecols=(1, 2, 11), delimiter=" ")
-
-    for i in range(len(cat_dates)):
-        year, month, day = cat_dates[i].split(',')[0].split('/')
-        if min_time is not None and max_time is not None:
-            if int(year) < min_time or int(year) > max_time:
-                continue
-        dtime = datetime.datetime(int(year), int(month), int(day))
-        eq_list.append({'lat': eq_data[i][0], 'lon': eq_data[i][1], 'date': dtime, 'magnitude': eq_data[i][2]})
-
-    return eq_list
-
-
 def ymd_decimal_year_lookup(from_decimal=False):
     import re
     """Returns a lookup table for (year, month, day) to decimal year, with the convention introduced by Nasa JPL."""
@@ -58,13 +40,13 @@ if __name__ == '__main__':
     station_code = 'J550'
     station_coordinates = np.array([38.301, 141.501])  # lat lon
 
-    min_time, max_time = 1995, 2011
+    min_time, max_time = 2000, 2025
 
     # Configure
     config = ModelConfig(
         d_param=.8,
         include_seasonal=True,
-        postseismic_mag_threshold=8.5,
+        postseismic_mag_threshold=6.5,
         postseismic_models=['log', 'exp'],
         postseismic_allow_combined=True,
         postseismic_pair_min_mag=8.5,
@@ -107,8 +89,6 @@ if __name__ == '__main__':
 
     ts, unc = ts * 1000, unc * 1000  # mm
 
-    # eq_catalogue = build_japan_catalogue_from_nied()
-    # print('# events in the EQ catalogue', len(eq_catalogue))
     fetcher = CatalogFetcher()
     '''eq_catalogue = fetcher.fetch_usgs_box(
         minlat=30.0, maxlat=45.0,
