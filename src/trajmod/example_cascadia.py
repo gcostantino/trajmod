@@ -36,6 +36,7 @@ from trajmod.events import CatalogFetcher
 from trajmod.events.amplitude_threshold_selector import AmplitudeThresholdSelector
 from trajmod.model.model import TrajectoryModel, ModelConfig
 from trajmod.events.event_selection import KneeEventSelector, LassoEventSelector, CompositeEventSelector
+from trajmod.model.nonlinear_prior import save_prior, load_prior
 from trajmod.visualization import TrajectoryVisualizer
 import numpy as np
 import datetime
@@ -61,6 +62,12 @@ def ymd_decimal_year_lookup(from_decimal=False):
 
 
 if __name__ == '__main__':
+    component = 1
+    station_code = 'ALBH'
+    station_coordinates = np.array([48.390, -123.487])  # lat lon  # do not forget to change that...
+
+    min_time, max_time = 2007, 2023
+
     # Configure
     config = ModelConfig(
         d_param=None,
@@ -74,12 +81,10 @@ if __name__ == '__main__':
         sse_timing_tol_max_days=120,  # cap, default is fine
         sse_min_duration_days=3,  # stops it collapsing to a step
         sse_timing_max_rounds=3,
-        sse_timing_allow_overlap=False
+        sse_timing_allow_overlap=False,
     )
 
-    station_code = 'ALBH'
-    station_coordinates = np.array([48.390, -123.487])  # lat lon  # do not forget to change that...
-    min_time, max_time = 2007, 2023
+
 
     date_lookup = ymd_decimal_year_lookup(from_decimal=True)
 
@@ -91,7 +96,7 @@ if __name__ == '__main__':
         {'date': datetime(*date_lookup[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
         (dcyr > min_time and dcyr < max_time)]
 
-    component = 0
+
     # data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.txt')
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.NA.tenv3')
 
@@ -138,7 +143,8 @@ if __name__ == '__main__':
         sse_catalog=sse_cat,
         eq_catalog=eq_catalogue,
         step_catalog=step_catalog,
-        config=config
+        config=config,
+        nonlinear_prior=None if component == 0 else load_prior(f'{station_code}_prior.json'),
     )
     print(model.G)
 
@@ -161,6 +167,9 @@ if __name__ == '__main__':
 
     print(model.G)
     results = model.fit(compute_uncertainty=True)
+    if component == 0:
+        prior = model.export_nonlinear()
+        save_prior(prior, f'{station_code}_prior.json')
 
     #print(results.metadata['sse_timing']['events'])
 
