@@ -72,7 +72,7 @@ if __name__ == '__main__':
         sse_timing_prior = False,
         sse_timing_tol_frac=1.,  # tolerance = 15 d for a 30-d event
         sse_timing_tol_max_days=120,  # cap, default is fine
-        sse_min_duration_days=1,  # stops it collapsing to a step
+        sse_min_duration_days=3,  # stops it collapsing to a step
         sse_timing_max_rounds=3,
         sse_timing_allow_overlap=False
     )
@@ -92,7 +92,8 @@ if __name__ == '__main__':
         (dcyr > min_time and dcyr < max_time)]
 
     component = 0
-    data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.txt')
+    # data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.txt')
+    data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.NA.tenv3')
 
     time, data_enu, unc_enu = data[:, 0], data[:, 1:4], data[:, 4:]
     # data_enu, unc_enu = data_enu[:, :2], unc_enu[:, :2]  # keep only horizontal
