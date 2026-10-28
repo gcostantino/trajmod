@@ -580,7 +580,7 @@ class TrajectoryVisualizer:
 
         for name in model.results.template_names:
             # Check for postseismic templates: "EQ_0_2011-03-11_log_tau180"
-            if '_log_tau' in name.lower() and name.lower().startswith('eq_'):
+            if any(f'_{k}_tau' in name.lower() for k in ('log', 'exp')) and name.lower().startswith('eq_'):
                 # Extract EQ index
                 parts = name.split('_')
                 if len(parts) >= 2:
@@ -690,135 +690,6 @@ class TrajectoryVisualizer:
                             rotation=90, ha='right', va='bottom',
                             fontsize=10, color='darkblue',
                             fontweight='bold')
-
-    # ============================================================================
-    # Helper Function for Event Markers
-    # ============================================================================
-    '''@staticmethod
-    def _add_event_markers_to_axis(ax, model, show_labels=True, label_position='top'):
-        """Add event markers with intelligent styling and labeling.
-
-        Args:
-            ax: Matplotlib axis
-            model: TrajectoryModel instance
-            show_labels: Whether to show magnitude labels
-            label_position: 'top' (horizontal on top) or 'parallel' (along line)
-        """
-        ylim = ax.get_ylim()
-        y_range = ylim[1] - ylim[0]
-
-        # ========================================================================
-        # 1. Identify which earthquakes have postseismic decay
-        # ========================================================================
-        eq_with_postseismic = set()
-
-        for name in model.results.template_names:
-            # Check for postseismic templates: "EQ_0_2011-03-11_log_tau180"
-            if '_log_tau' in name.lower() and name.lower().startswith('eq_'):
-                # Extract EQ index
-                parts = name.split('_')
-                if len(parts) >= 2:
-                    try:
-                        eq_idx = int(parts[1])
-                        eq_with_postseismic.add(eq_idx)
-                    except ValueError:
-                        pass
-
-        # ========================================================================
-        # 2. Plot Earthquakes
-        # ========================================================================
-        for i, eq in enumerate(model.selected_eq):
-            eq_time = eq['eq_day']
-            mag = eq.get('magnitude', 0)
-            event_type = eq.get('event_type', 'earthquake')
-
-            # Determine event type and styling
-            if event_type in ['antenna_change', 'antennachange', 'equipment_change',
-                              'equipmentchange', 'monument_change', 'monumentchange']:
-                # Antenna/Equipment change
-                color = 'gray'
-                linestyle = ':'
-                linewidth = 1.5
-                alpha = 0.6
-                label_text = 'Antenna'
-                label_color = 'gray'
-
-            elif i in eq_with_postseismic:
-                # Earthquake WITH postseismic decay
-                color = 'darkred'
-                linestyle = '--'
-                linewidth = 2.0
-                alpha = 0.7
-                label_text = f'M{mag:.1f}+PS' if mag > 0 else 'EQ+PS'
-                label_color = 'darkred'
-
-            else:
-                # Regular earthquake (step only)
-                color = 'red'
-                linestyle = '--'
-                linewidth = 1.5
-                alpha = 0.5
-                label_text = f'M{mag:.1f}' if mag > 0 else 'EQ'
-                label_color = 'red'
-
-            # Plot vertical line
-            ax.axvline(eq_time, color=color, linestyle=linestyle,
-                       linewidth=linewidth, alpha=alpha, zorder=2)
-
-            # Add label
-            if show_labels:
-                if label_position == 'top':
-                    # Horizontal label at top
-                    ax.text(eq_time, ylim[1] - 0.02 * y_range,
-                            label_text,
-                            rotation=0, ha='center', va='top',
-                            fontsize=7, color=label_color,
-                            fontweight='bold',
-                            bbox=dict(boxstyle='round,pad=0.3',
-                                      facecolor='white',
-                                      edgecolor=label_color,
-                                      alpha=0.8,
-                                      linewidth=1))
-
-                elif label_position == 'parallel':
-                    # Label parallel to line (rotated 90°)
-                    ax.text(eq_time, ylim[0] + 0.1 * y_range,
-                            label_text,
-                            rotation=90, ha='right', va='bottom',
-                            fontsize=10, color=label_color,
-                            fontweight='bold',
-                            #bbox=dict(boxstyle='round,pad=0.3',
-                            #          facecolor='white',
-                            #          edgecolor=label_color,
-                            #          alpha=0.8,
-                            #          linewidth=1)
-                    )
-
-        # ========================================================================
-        # 3. Plot SSEs (keep as bands)
-        # ========================================================================
-        for sse in model.selected_sse:
-            start, end = sse['start'], sse['end']
-            mag = sse.get('magnitude', 0)
-
-            # Plot band
-            ax.axvspan(start, end, alpha=0.15, color='blue', zorder=0)
-
-            # Add label if requested
-            if show_labels:
-                mid_time = start + (end - start) / 2
-                label_text = f'SSE M{mag:.1f}' if mag > 0 else 'SSE'
-
-                ax.text(mid_time, ylim[1] - 0.08 * y_range,
-                        label_text,
-                        rotation=0, ha='center', va='top',
-                        fontsize=7, color='darkblue',
-                        fontweight='bold',
-                        bbox=dict(boxstyle='round,pad=0.3',
-                                  facecolor='white',
-                                  edgecolor='blue',
-                                  alpha=0.8,
-                                  linewidth=1))'''
 
     @staticmethod
     def plot_coefficients(results, top_n: int = 20, figsize: Tuple[int, int] = (10, 8),

@@ -78,14 +78,18 @@ class DesignMatrixBuilder:
         columns = self.build_baseline_columns(selected_sse, selected_eq)
         return self._stack(columns), list(self.template_names)
 
-    def make_postseismic_column(self, eq_day, tau: float) -> np.ndarray:
-        """Single log-decay column (used by the tau search in the model)."""
-        return self.templates.log_decay(eq_day, tau)
+    def make_postseismic_column(self, eq_day, tau: float, kind: str = 'log') -> np.ndarray:
+        """Single postseismic column ('log' afterslip-like, 'exp' viscoelastic)."""
+        if kind == 'log':
+            return self.templates.log_decay(eq_day, tau)
+        if kind == 'exp':
+            return self.templates.exp_decay(eq_day, tau)
+        raise ValueError(f"Unknown postseismic kind '{kind}'")
 
     @staticmethod
-    def postseismic_name(eq_idx: int, eq_day, tau: float) -> str:
+    def postseismic_name(eq_idx: int, eq_day, tau: float, kind: str = 'log') -> str:
         """Canonical name of a postseismic column."""
-        return f"EQ_{eq_idx}_{eq_day.strftime('%Y-%m-%d')}_log_tau{tau}"
+        return f"EQ_{eq_idx}_{eq_day.strftime('%Y-%m-%d')}_{kind}_tau{tau}"
 
     @staticmethod
     def eq_step_index(names: List[str], eq_idx: int) -> Optional[int]:
@@ -166,8 +170,9 @@ class DesignMatrixBuilder:
     def _build_postseismic_templates(self, post_specs: List[Dict]) -> List[np.ndarray]:
         columns = []
         for spec in post_specs:
-            columns.append(self.templates.log_decay(spec['eq_day'], spec['tau']))
+            kind = spec.get('kind', 'log')
+            columns.append(self.make_postseismic_column(spec['eq_day'], spec['tau'], kind))
             self.template_names.append(
-                self.postseismic_name(spec['eq_idx'], spec['eq_day'], spec['tau'])
+                self.postseismic_name(spec['eq_idx'], spec['eq_day'], spec['tau'], kind)
             )
         return columns

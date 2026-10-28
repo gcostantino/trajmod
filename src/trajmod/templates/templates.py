@@ -124,6 +124,19 @@ class TemplateFunctions:
         date_num = (event_day - self.t0).days
         return self.log_decay_days(date_num, tau)
 
+    def exp_decay_days(self, day_num: float, tau: float) -> np.ndarray:
+        """Maxwell-type relaxation 1 - exp(-dt/tau) for dt > 0, at a day offset (since t0)."""
+        delta_t = self.t_days - day_num
+        out = np.zeros_like(self.t_days, dtype=float)
+        mask = delta_t > 0
+        out[mask] = -np.expm1(-delta_t[mask] / tau)
+        return out
+
+    def exp_decay(self, event_day: datetime.datetime, tau: float) -> np.ndarray:
+        """Exponential (viscoelastic) relaxation after an earthquake."""
+        date_num = (event_day - self.t0).days
+        return self.exp_decay_days(date_num, tau)
+
     # ------------------------------------------------------------------ #
     # B-spline helpers (unchanged)
     # ------------------------------------------------------------------ #

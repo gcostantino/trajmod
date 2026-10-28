@@ -13,6 +13,7 @@ class ModelConfig:
         d_param: Empirical scaling parameter in radius law
         include_seasonal: Whether to include annual & semi-annual terms
         use_envelope_basis: Whether to add extra seasonal periods (envelope_periods)
+
         postseismic_mag_threshold: Minimum magnitude for post-seismic template
             (only used when d_param is set)
         tau_grid: Candidate tau values (days) for post-seismic decay
@@ -27,6 +28,19 @@ class ModelConfig:
             with the other post-seismic terms fixed (0 disables backfitting)
         enforce_postseismic_sign_consistency: Post-seismic must have the sign of the step
         postseismic_min_step_amplitude: Minimum |step| (mm) to consider post-seismic
+        postseismic_models: Post-seismic shapes allowed for a single term: 'log' (log(1 + dt/tau),
+            afterslip-like) and/or 'exp' (1 - exp(-dt/tau), viscoelastic relaxation that saturates).
+            Default ['log'] keeps the legacy log-only behaviour
+        tau_grid_exp: Candidate tau values (days) for the exponential term, searched like tau_grid
+        postseismic_allow_combined: Also test a log + exp pair for the same earthquake, with both
+            taus searched jointly (needs both 'log' and 'exp' in postseismic_models). The pair is
+            kept only if it beats the best single term by postseismic_selection_criterion
+        postseismic_exp_min_ratio: In a log + exp pair, only combinations with
+            tau_exp >= ratio * tau_log are tried, so the exponential is the slower process
+            and near-duplicate pairs are avoided (must be >= 1)
+        postseismic_exp_min_mag: Minimum magnitude for an exponential-only postseismic term
+        postseismic_pair_min_mag: Minimum magnitude for a log+exp pair (needs postseismic_allow_combined)
+
         merge_close_sse: Whether to merge close SSE templates
         max_overlap_merge_sse: Max gap (days) between SSEs that triggers a merge
         merge_earthquakes_same_day: Whether to merge earthquakes on the same day
@@ -59,12 +73,20 @@ class ModelConfig:
 
     fit_postseismic_decay: bool = True
     postseismic_selection_criterion: str = 'aic'  # 'aic', 'bic', 'ftest', 'always'
-    postseismic_selection_threshold: float = -2   # dAIC/dBIC < -2 or p < 0.05
-    postseismic_tau_penalty_params: int = 1       # 1 = amplitude only, 2 = amplitude + tau
+    postseismic_selection_threshold: float = -2  # dAIC/dBIC < -2 or p < 0.05
+    postseismic_tau_penalty_params: int = 1  # 1 = amplitude only, 2 = amplitude + tau
     postseismic_backfit_passes: int = 2
-    fit_best_postseismic_tau: bool = True         # DEPRECATED: no longer used
+    fit_best_postseismic_tau: bool = True  # DEPRECATED: no longer used
     enforce_postseismic_sign_consistency: bool = True
-    postseismic_min_step_amplitude: float = 5.0   # mm
+    postseismic_min_step_amplitude: float = 5.0  # mm
+
+    postseismic_models: List[str] = field(default_factory=lambda: ['log'])  # 'log', 'exp'
+    tau_grid_exp: List[int] = field(default_factory=lambda: [180, 365, 730, 1460, 2920])
+    postseismic_allow_combined: bool = False  # log + exp for the same earthquake
+    postseismic_exp_min_ratio: float = 2.0  # tau_exp >= ratio * tau_log in a combined pair
+    postseismic_exp_min_mag: float = 7.5    # min magnitude to allow an exp-only term
+    postseismic_pair_min_mag: float = 7.5   # min magnitude to allow a log+exp pair
+
 
     merge_close_sse: bool = True
     max_overlap_merge_sse: int = 5  # days
@@ -127,6 +149,18 @@ class ModelConfig:
 
         if self.postseismic_backfit_passes < 0:
             raise ValueError("postseismic_backfit_passes must be non-negative")
+
+        if not set(self.postseismic_models) <= {'log', 'exp'} or not self.postseismic_models:
+            raise ValueError("postseismic_models must be a non-empty subset of ['log', 'exp']")
+        if len(self.tau_grid_exp) == 0 or any(t <= 0 for t in self.tau_grid_exp):
+            raise ValueError("tau_grid_exp must contain positive values")
+        if self.postseismic_allow_combined and not {'log', 'exp'} <= set(self.postseismic_models):
+            raise ValueError("postseismic_allow_combined needs both 'log' and 'exp' in postseismic_models")
+        if self.postseismic_exp_min_ratio < 1:
+            raise ValueError("postseismic_exp_min_ratio must be >= 1")
+        if self.postseismic_exp_min_mag < 0 or self.postseismic_pair_min_mag < 0:
+            raise ValueError("postseismic_exp_min_mag and postseismic_pair_min_mag "
+                             "must be non-negative")
 
         if self.max_overlap_merge_sse < 0:
             raise ValueError("max_overlap_merge_sse must be non-negative")

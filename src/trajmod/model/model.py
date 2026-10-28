@@ -273,52 +273,66 @@ class TrajectoryModel:
         logger.warning(f"  Unknown event_type '{event_type}' -> no postseismic")
         return False
 
-    def _optimize_tau_for_eq(self,
-                             eq_day,
-                             G_baseline: np.ndarray,
-                             existing_post_columns: List[np.ndarray],
-                             weights: np.ndarray,
-                             builder: DesignMatrixBuilder,
-                             fitter: FittingStrategy,
-                             ref_sign: Optional[float] = None
-                             ) -> Tuple[Optional[float], float, Optional[np.ndarray], Optional[float]]:
-        """Find the tau minimising the weighted chi-square for one earthquake.
+    # ------------------------------------------------------------------ #
+    # Postseismic candidates: log, exp, or log+exp for one earthquake
+    # ------------------------------------------------------------------ #
+    def _postseismic_kinds(self, mag: float = 0.0) -> List[str]:
+        """Single-term kinds allowed for an earthquake of magnitude `mag`."""
+        exp_min = float(getattr(self.config, 'postseismic_exp_min_mag', 0.0))
+        return [k for k in getattr(self.config, 'postseismic_models', ['log'])
+                if k != 'exp' or mag >= exp_min]
 
-        Args:
-            existing_post_columns: postseismic columns of the OTHER accepted terms
-            ref_sign: if given, only taus whose amplitude has this sign are eligible
+    def _combined_allowed(self, mag: float = 0.0) -> bool:
+        models = getattr(self.config, 'postseismic_models', ['log'])
+        pair_min = float(getattr(self.config, 'postseismic_pair_min_mag', 0.0))
+        return bool(getattr(self.config, 'postseismic_allow_combined', False)
+                    and 'log' in models and 'exp' in models and mag >= pair_min)
 
-        Returns:
-            (best_tau, best_chi2, best_template, best_coeff_post)
-        """
-        best_tau = None
-        best_chi2 = np.inf
-        best_template = None
-        best_coeff = None
+    def _tau_grid_for(self, kind: str) -> List[float]:
+        return list(self.config.tau_grid_exp if kind == 'exp' else self.config.tau_grid)
 
-        base_part = (np.hstack([G_baseline, np.column_stack(existing_post_columns)])
-                     if existing_post_columns else G_baseline)
+    def _single_candidates(self, kinds: List[str]) -> List[List[Tuple[str, float]]]:
+        return [[(k, tau)] for k in kinds for tau in self._tau_grid_for(k)]
 
-        for tau in self.config.tau_grid:
-            template = builder.make_postseismic_column(eq_day, tau)
-            G_tmp = np.hstack([base_part, template[:, np.newaxis]])
+    def _pair_candidates(self) -> List[List[Tuple[str, float]]]:
+        ratio = float(getattr(self.config, 'postseismic_exp_min_ratio', 2.0))
+        return [[('log', tl), ('exp', te)]
+                for tl in self._tau_grid_for('log')
+                for te in self._tau_grid_for('exp')
+                if te >= ratio * tl]
 
-            out = self._fit_chi2(G_tmp, weights, fitter)
+    def _search_terms(self,
+                      eq_day,
+                      G_baseline: np.ndarray,
+                      existing_cols: List[np.ndarray],
+                      weights: np.ndarray,
+                      builder: DesignMatrixBuilder,
+                      fitter: FittingStrategy,
+                      candidates: List[List[Tuple[str, float]]],
+                      ref_sign: Optional[float] = None) -> Optional[Dict]:
+        """Best candidate (lowest weighted chi2); all amplitudes of the new terms
+        must have sign ref_sign when it is given. Returns None if none is valid."""
+        base = (np.hstack([G_baseline, np.column_stack(existing_cols)])
+                if existing_cols else G_baseline)
+        best = None
+        for terms in candidates:
+            cols = [builder.make_postseismic_column(eq_day, tau, kind) for kind, tau in terms]
+            out = self._fit_chi2(np.hstack([base, np.column_stack(cols)]), weights, fitter)
             if out is None:
                 continue
             chi2, coeffs = out
-            coeff_post = float(coeffs[-1])
-
-            if ref_sign is not None and ref_sign != 0 and np.sign(coeff_post) != ref_sign:
+            cp = [float(c) for c in coeffs[-len(terms):]]
+            if ref_sign is not None and ref_sign != 0 \
+                    and any(np.sign(c) != ref_sign for c in cp):
                 continue
+            if best is None or chi2 < best['chi2']:
+                best = {'terms': [{'kind': k, 'tau': t} for k, t in terms],
+                        'chi2': chi2, 'coeffs': cp}
+        return best
 
-            if chi2 < best_chi2:
-                best_chi2 = chi2
-                best_tau = tau
-                best_template = template
-                best_coeff = coeff_post
-
-        return best_tau, best_chi2, best_template, best_coeff
+    @staticmethod
+    def _describe_terms(terms: List[Dict]) -> str:
+        return ' + '.join(f"{t['kind']} tau={t['tau']}d" for t in terms)
 
     def _test_postseismic_significance(self,
                                        eq_idx: int,
@@ -330,70 +344,100 @@ class TrajectoryModel:
                                        coeff_step_ref: float,
                                        weights: np.ndarray,
                                        builder: DesignMatrixBuilder,
-                                       fitter: FittingStrategy
-                                       ) -> Tuple[bool, Optional[float], Optional[np.ndarray], Dict]:
-        """Test whether adding a postseismic term significantly improves the fit.
+                                       fitter: FittingStrategy,
+                                       eq_mag: float = 0.0
+                                       ) -> Tuple[bool, Optional[Dict], Dict]:
+        """Test the postseismic model(s) for one earthquake.
 
-        Includes sign consistency (postseismic must have the same sign as the step).
+        Options: best single term (log or exp), and, if allowed, the best joint
+        log+exp pair over (tau_log, tau_exp). Every amplitude must have the sign
+        of the step. The pair must beat the best single option by the criterion,
+        and the chosen model must beat 'no postseismic term'.
+        Returns (is_significant, chosen, metrics); chosen = {'terms', 'coeffs', 'chi2'}.
         """
-        existing_cols = [builder.make_postseismic_column(s['eq_day'], s['tau']) for s in post_specs]
+        existing_cols = [builder.make_postseismic_column(s['eq_day'], s['tau'], s.get('kind', 'log'))
+                         for s in post_specs]
+        enforce = self.config.enforce_postseismic_sign_consistency
+        step_sign = float(np.sign(coeff_step_ref))
 
-        best_tau, best_chi2, best_template, coeff_post = self._optimize_tau_for_eq(
-            eq_day, G_baseline, existing_cols, weights, builder, fitter)
+        singles, pairs, rejected = [], [], None
 
-        if best_tau is None:
-            logger.warning(f"EQ {eq_idx}: could not find a valid tau")
-            return False, None, None, {}
+        single = self._search_terms(eq_day, G_baseline, existing_cols, weights, builder, fitter,
+                                    self._single_candidates(self._postseismic_kinds(eq_mag)))
+        if single is not None:
+            if (not enforce) or all(np.sign(c) == step_sign for c in single['coeffs']):
+                singles.append(single)
+            else:
+                rejected = single
 
-        if self.config.enforce_postseismic_sign_consistency:
-            if np.sign(coeff_step_ref) != np.sign(coeff_post):
+        if self._combined_allowed(eq_mag):
+            pair = self._search_terms(eq_day, G_baseline, existing_cols, weights, builder, fitter,
+                                      self._pair_candidates(),
+                                      ref_sign=step_sign if enforce else None)
+            if pair is not None:
+                pairs.append(pair)
+
+        if not singles and not pairs:
+            if rejected is not None:
                 logger.info(f"  EQ {eq_idx}: opposite sign "
-                            f"(step={coeff_step_ref:.2f}mm, post={coeff_post:.2f}mm) -> REJECTED")
-                return False, None, None, {
-                    'reason': 'opposite sign',
-                    'coeff_step': coeff_step_ref,
-                    'coeff_post': coeff_post,
-                }
+                            f"(step={coeff_step_ref:.2f}mm, post={rejected['coeffs'][-1]:.2f}mm) "
+                            f"-> REJECTED")
+                return False, None, {'reason': 'opposite sign', 'coeff_step': coeff_step_ref,
+                                     'coeff_post': rejected['coeffs']}
+            logger.warning(f"EQ {eq_idx}: could not find a valid postseismic model")
+            return False, None, {}
 
         n_post = len(post_specs)
         n_cols_without = G_baseline.shape[1] + n_post
         p_without = self._n_params(n_cols_without, n_post)
-        p_with = self._n_params(n_cols_without + 1, n_post + 1)
+        for o in singles + pairs:
+            k = len(o['terms'])
+            o['p'] = self._n_params(n_cols_without + k, n_post + k)
 
         criterion = self.config.postseismic_selection_criterion
         threshold = self.config.postseismic_selection_threshold
-
-        metrics = {
-            'best_tau': best_tau,
-            'chi2_without': chi2_baseline,
-            'chi2_with': best_chi2,
-            'delta_chi2': best_chi2 - chi2_baseline,
-            'coeff_post': coeff_post,
-        }
+        chosen = singles[0] if singles else pairs[0]
+        metrics: Dict = {}
 
         if criterion == 'always':
             is_significant = True
-            metrics['reason'] = 'always included'
+            reason = 'always included'
 
         elif criterion in ('aic', 'bic'):
+            for o in singles + pairs:
+                o['ic'] = self._compute_information_criterion(o['chi2'], n_obs, o['p'], criterion)
+            if singles and pairs and pairs[0]['ic'] - singles[0]['ic'] < threshold:
+                chosen = pairs[0]
             ic_without = self._compute_information_criterion(chi2_baseline, n_obs, p_without, criterion)
-            ic_with = self._compute_information_criterion(best_chi2, n_obs, p_with, criterion)
-            delta_ic = ic_with - ic_without
+            delta_ic = chosen['ic'] - ic_without
             is_significant = delta_ic < threshold
             metrics[f'delta_{criterion}'] = delta_ic
-            metrics['reason'] = (f"Δ{criterion.upper()}={delta_ic:.1f}, "
-                                 f"Δχ²={metrics['delta_chi2']:.1f}")
+            reason = f"Δ{criterion.upper()}={delta_ic:.1f}, Δχ²={chosen['chi2'] - chi2_baseline:.1f}"
 
         elif criterion == 'ftest':
-            p_value = self._compute_ftest(chi2_baseline, best_chi2, n_obs, p_without, p_with)
+            if singles and pairs:
+                p_pair = self._compute_ftest(singles[0]['chi2'], pairs[0]['chi2'], n_obs,
+                                             singles[0]['p'], pairs[0]['p'])
+                if p_pair < threshold:
+                    chosen = pairs[0]
+            p_value = self._compute_ftest(chi2_baseline, chosen['chi2'], n_obs,
+                                          p_without, chosen['p'])
             is_significant = p_value < threshold
             metrics['p_value'] = p_value
-            metrics['reason'] = f"p={p_value:.4f}, Δχ²={metrics['delta_chi2']:.1f}"
+            reason = f"p={p_value:.4f}, Δχ²={chosen['chi2'] - chi2_baseline:.1f}"
 
         else:
             raise ValueError(f"Unknown criterion: {criterion}")
 
-        return is_significant, best_tau, best_template, metrics
+        metrics.update({
+            'desc': self._describe_terms(chosen['terms']),
+            'chi2_without': chi2_baseline,
+            'chi2_with': chosen['chi2'],
+            'delta_chi2': chosen['chi2'] - chi2_baseline,
+            'coeff_post': chosen['coeffs'],
+            'reason': reason,
+        })
+        return is_significant, chosen, metrics
 
     def _backfit_tau(self,
                      G_baseline: np.ndarray,
@@ -402,30 +446,44 @@ class TrajectoryModel:
                      builder: DesignMatrixBuilder,
                      fitter: FittingStrategy,
                      n_passes: int) -> None:
-        """Re-optimise each accepted tau with all other postseismic terms held fixed.
+        """Re-optimise the tau(s) of each earthquake with the other earthquakes fixed.
 
-        Fixes the order dependence of the greedy pass. Updates post_specs in place.
+        A single term keeps its kind and searches its own grid; a log+exp pair is
+        re-optimised jointly. Signs are enforced as in the selection.
         """
-        if len(post_specs) < 2 or n_passes <= 0:
+        eq_ids = list(dict.fromkeys(s['eq_idx'] for s in post_specs))
+        if len(eq_ids) < 2 or n_passes <= 0:
             return
 
         for p in range(n_passes):
             changed = False
-            for k, spec in enumerate(post_specs):
-                others = [builder.make_postseismic_column(s['eq_day'], s['tau'])
-                          for j, s in enumerate(post_specs) if j != k]
-                ref_sign = (np.sign(spec['coeff_step'])
+            for eq_id in eq_ids:
+                group = [j for j, s in enumerate(post_specs) if s['eq_idx'] == eq_id]
+                others = [builder.make_postseismic_column(s['eq_day'], s['tau'], s.get('kind', 'log'))
+                          for j, s in enumerate(post_specs) if j not in group]
+                first = post_specs[group[0]]
+                ref_sign = (float(np.sign(first['coeff_step']))
                             if self.config.enforce_postseismic_sign_consistency else None)
 
-                tau, _, _, coeff_post = self._optimize_tau_for_eq(
-                    spec['eq_day'], G_baseline, others, weights, builder, fitter, ref_sign)
+                if len(group) == 1:
+                    cands = self._single_candidates([first.get('kind', 'log')])
+                else:
+                    cands = self._pair_candidates()
 
-                if tau is not None and tau != spec['tau']:
-                    logger.info(f"  Backfit pass {p + 1}: EQ {spec['eq_idx']} "
-                                f"tau {spec['tau']} -> {tau}")
-                    spec['tau'] = tau
-                    spec['coeff_post'] = coeff_post
+                best = self._search_terms(first['eq_day'], G_baseline, others, weights,
+                                          builder, fitter, cands, ref_sign)
+                if best is None:
+                    continue
+
+                old = [(post_specs[j].get('kind', 'log'), post_specs[j]['tau']) for j in group]
+                new = [(t['kind'], t['tau']) for t in best['terms']]
+                if new != old:
+                    logger.info(f"  Backfit pass {p + 1}: EQ {eq_id} {old} -> {new}")
                     changed = True
+                for j, t, c in zip(group, best['terms'], best['coeffs']):
+                    post_specs[j]['kind'] = t['kind']
+                    post_specs[j]['tau'] = t['tau']
+                    post_specs[j]['coeff_post'] = c
 
             if not changed:
                 break
@@ -514,22 +572,25 @@ class TrajectoryModel:
             eq_day = eq['eq_day']
             eq_mag = eq.get('magnitude', 0)
 
-            is_sig, best_tau, _, metrics = self._test_postseismic_significance(
+            is_sig, chosen, metrics = self._test_postseismic_significance(
                 eq_idx=eq_idx, eq_day=eq_day, G_baseline=G_baseline,
                 post_specs=post_specs, chi2_baseline=chi2_current, n_obs=n_obs,
                 coeff_step_ref=coeff_step, weights=weights,
-                builder=builder, fitter=fitter)
+                builder=builder, fitter=fitter,
+                eq_mag=float(eq_mag or 0.0))
 
-            if is_sig and best_tau is not None:
-                post_specs.append({
-                    'eq_idx': eq_idx,
-                    'eq_day': eq_day,
-                    'tau': best_tau,
-                    'coeff_step': coeff_step,
-                    'coeff_post': metrics['coeff_post'],
-                })
+            if is_sig and chosen is not None:
+                for term, coeff in zip(chosen['terms'], chosen['coeffs']):
+                    post_specs.append({
+                        'eq_idx': eq_idx,
+                        'eq_day': eq_day,
+                        'kind': term['kind'],
+                        'tau': term['tau'],
+                        'coeff_step': coeff_step,
+                        'coeff_post': coeff,
+                    })
                 logger.info(f"  EQ {eq_idx} (M{eq_mag:.1f}, step={coeff_step:.1f}mm): "
-                            f"tau={best_tau}d, {metrics['reason']} -> KEPT")
+                            f"{metrics['desc']}, {metrics['reason']} -> KEPT")
                 chi2_current = metrics['chi2_with']
             else:
                 reason = metrics.get('reason', 'failed')
@@ -555,7 +616,7 @@ class TrajectoryModel:
     @staticmethod
     def _post_signature(post_specs: List[Dict]) -> Tuple:
         """Hashable summary of the postseismic decisions (which EQs, which tau)."""
-        return tuple(sorted((s['eq_idx'], s['tau']) for s in post_specs))
+        return tuple(sorted((s['eq_idx'], s.get('kind', 'log'), s['tau']) for s in post_specs))
 
     @staticmethod
     def _sse_times(events: List[Dict]) -> Tuple:
@@ -664,7 +725,6 @@ class TrajectoryModel:
             'post_specs_initial': first_post,
             'post_specs_final': [dict(s) for s in self.post_specs],
         }
-
 
     # ------------------------------------------------------------------ #
     # Event selection from catalogs
@@ -849,7 +909,6 @@ class TrajectoryModel:
             self._optimize_sse_timing()
         elif self.G is None:
             self.build_design_matrix()
-
 
         fitter = method or OLSFitter()
         weights = self._prepare_weights(weights)
