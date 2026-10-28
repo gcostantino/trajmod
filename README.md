@@ -13,10 +13,40 @@
 
 A Python library for modeling GNSS position time series with support for:
 - Secular trends, acceleration and seasonal components
-- Slow Slip Events (SSE) with raised-cosine templates
-- Earthquake co-seismic offsets and post-seismic relaxation
-- **Advanced separable non-linear post-seismic fitting** (amplitude, relaxation time)
-- Event-type support (earthquakes vs. antenna changes)
+- Slow Slip Events (SSE) with raised-cosine templates, with optional nonlinear optimisation of their timing
+- Earthquake co-seismic offsets with log, exponential, or combined log+exp post-seismic terms
+- Station-specific non-earthquake steps (antenna, receiver, monument changes) from a separate step catalogue
+
+### Postseismic selection
+
+An earthquake gets a postseismic term only if it passes these (customizable) checks:
+
+1. Magnitude at least `postseismic_mag_threshold` (default 6.5; 0 disables the gate).
+2. Co-seismic step at least `postseismic_min_step_amplitude` (default 5 mm).
+3. The postseismic amplitude has the same sign as the step.
+4. The information criterion (`postseismic_selection_criterion`) prefers the model with the term.
+
+The shape is chosen per earthquake among the allowed candidates:
+
+- `log`: afterslip-like, with tau from `tau_grid`.
+- `exp`: viscoelastic-like, with tau from `tau_grid_exp`. Allowed from magnitude `postseismic_exp_min_mag` (default 7.5).
+- `log+exp` pair: both taus searched jointly, with `tau_exp >= postseismic_exp_min_ratio * tau_log`. Needs `postseismic_allow_combined=True`, both kinds in `postseismic_models`, and magnitude at least `postseismic_pair_min_mag`.
+
+By default, only `log` is used (`postseismic_models=['log']`). The accepted terms are stored in `model.post_specs` and shared by `predict()`.
+
+
+### Nonlinear SSE timing
+
+With `sse_optimize_timing=True` (or `model.fit(optimize_sse_timing=True)`), the start and end of each SSE are adjusted by whole days within a tolerance around the catalogue times:
+
+- For each candidate (start, end), the linear coefficients are profiled out exactly: the chi-square is computed on data and template projected onto the complement of all other columns, so no refit is needed per candidate.
+- Tolerance per event is `min(sse_timing_tol_max_days, max(sse_timing_tol_days, sse_timing_tol_frac * duration))`.
+- `sse_timing_prior=True` adds a Gaussian prior pulling start and end toward the catalogue.
+- A changed timing is accepted only if it improves the information criterion (`sse_timing_criterion`, 'bic' or 'aic').
+- The search is coordinate descent over all SSEs (`sse_timing_max_rounds` passes). Each round rebuilds the design matrix, so postseismic selection is rerun with the current SSE times. It stops when neither SSE times nor postseismic decisions change.
+- Each search starts from the catalogue times, so the tolerance is always centred on the catalogue.
+
+The outcome is in `results.metadata['sse_timing']`. Call `model.reset_sse_timing()` to go back to the catalogue times.
 
 ---
 
@@ -44,21 +74,22 @@ This ensures physically meaningful postseismic signals are retained while suppre
 
 ## Installation
 
-### From source:
+From PyPI:
+
 ```bash
 pip install trajmod
 ```
 
-### Requirements:
-- Python ≥ 3.9
-- numpy ≥ 1.20
-- scipy ≥ 1.7
-- matplotlib ≥ 3.3
-- scikit-learn ≥ 1.0
-- pyproj ≥ 3.0
-- requests ≥ 2.25
+From source:
 
----
+```bash
+git clone [https://github.com/gcostantino/trajmod](https://github.com/gcostantino/trajmod)
+cd trajmod
+pip install -e .
+```
+
+Requirements: Python 3.9 or later, numpy, scipy, matplotlib, scikit-learn, pyproj, requests.
+
 
 ## Quick Start
 
@@ -69,82 +100,60 @@ from trajmod.model import TrajectoryModel
 from trajmod.config import ModelConfig
 from trajmod.events import CatalogFetcher
 
-# Generate synthetic data
+# Synthetic data
 t0 = datetime(2020, 1, 1)
 times = np.array([t0 + timedelta(days=i) for i in range(365)])
-data = np.random.randn(365) * 2.0  # 2mm noise
+data = np.random.randn(365) * 2.0
 errors = np.ones(365) * 2.0
 
-# Define earthquake catalog...
-eq_catalog = [
-    {
-        'date': datetime(2020, 3, 15),
-        'lat': 40.0,
-        'lon': -120.0,
-        'magnitude': 7.2
-    },
-    {
-        'date': datetime(2020, 8, 1),
-        'event_type': 'antenna_change'  # No postseismic for equipment changes
-    }
-]
+# Earthquakes ...
+eq_catalog = [{'date': datetime(2020, 3, 15), 'lat': 40.0, 'lon': -120.0, 'magnitude': 7.2}]
 
-# ... or fetch it automatically (e.g., from USGS)
+# ... or fetch them from USGS
 fetcher = CatalogFetcher()
 eq_catalog = fetcher.fetch_usgs(
     lat=40.0, lon=-120.0, radius_km=500,
     start_date="2020-01-01", end_date="2020-12-31",
-    min_magnitude=5.0
+    min_magnitude=5.0,
 )
 
-# Configure model with multi-tier postseismic filtering
+# Station steps (antenna, receiver changes): separate from earthquakes
+step_catalog = [{'date': datetime(2020, 8, 1), 'event_type': 'antenna_change'}]
+
 config = ModelConfig(
-    d_param=1.0,                              # Spatial filtering
-    include_seasonal=True,                     # Annual + semi-annual
-    postseismic_mag_threshold=6.5,            # Tier 1: Magnitude filter
-    postseismic_min_step_amplitude=2.0,       # Tier 2: Step amplitude filter
-    enforce_postseismic_sign_consistency=True, # Tier 3: Sign check
-    postseismic_selection_criterion='aic',    # Tier 4: Statistical test
-    postseismic_selection_threshold=-2.0,     # ΔAIC < -2 required
-    tau_grid=[7, 14, 30, 60, 90, 180, 1800]  # Optimize τ per event
+    d_param=1.0,
+    include_seasonal=True,
+    postseismic_models=['log', 'exp'],
+    postseismic_allow_combined=True,
+    postseismic_mag_threshold=6.5,
+    postseismic_min_step_amplitude=2.0,
+    postseismic_selection_criterion='bic',
+    postseismic_selection_threshold=-2.0,
 )
 
-# Create and fit model
 model = TrajectoryModel(
-    t=times,
-    y=data,
-    sigma_y=errors,
-    station_lat=40.0,
-    station_lon=-120.0,
+    t=times, y=data, sigma_y=errors,
+    station_lat=40.0, station_lon=-120.0,
     eq_catalog=eq_catalog,
-    config=config
+    step_catalog=step_catalog,
+    config=config,
 )
 
-# Build design matrix (applies multi-tier filtering)
-model.build_design_matrix()
-
-# Fit model
 results = model.fit(compute_uncertainty=True)
 
-# Inspect results
-print(f"RMS: {results.rms:.3f} mm")
-print(f"Coefficients: {results.coeffs}")
-print(f"Template names: {results.template_names}")
+print(results.summary())
+print(results.template_names)
+print(results.metadata['uncertainty'].standard_errors)
 
-# Get uncertainty estimates
-print(f"Standard errors: {results.uncertainty['standard_errors']}")
-
-# Predict at new times
 future_times = np.array([t0 + timedelta(days=i) for i in range(365, 730)])
 predictions = model.predict(future_times)
 ```
 
-
 ---
 
-## Earthquake Catalogs
+## Catalogs
 
-### Quick: Fetch from USGS
+### Earthquakes
 
 ```python
 from trajmod.events import CatalogFetcher
@@ -153,74 +162,95 @@ fetcher = CatalogFetcher()
 eq_catalog = fetcher.fetch_usgs(
     lat=40.0, lon=-120.0, radius_km=500,
     start_date="2020-01-01", end_date="2023-12-31",
-    min_magnitude=5.0
+    min_magnitude=5.0,
 )
 ```
 
-### Manual: Provide Your Own
+Your own catalogue is a list of dicts with a datetime (not a string) in `'date'` or `'time'`, plus `lat`, `lon` and `magnitude`. The other fetchers are `fetch_isc`, `fetch_nied` and `fetch_jma`, and each has a `_box` variant for a rectangular region.
+
+### Station steps
+
+Antenna, receiver and monument changes go in `step_catalog`, usually one list per station:
 
 ```python
-eq_catalog = [
-    {
-        'time': datetime(2020, 3, 15),  # datetime object, not string!
-        'lat': 40.0,
-        'lon': -120.0,
-        'magnitude': 7.2
-    }
+step_catalog = [
+    {'date': datetime(2013, 5, 2), 'event_type': 'antenna_change'},
+    {'date': datetime(2016, 8, 14), 'event_type': 'receiver_change'},
 ]
-
+model = TrajectoryModel(..., eq_catalog=eq_catalog, step_catalog=step_catalog)
 ```
-Catalogs are **automatically validated** on model creation with ```TrajectoryModel(..., validate_catalogs=True)```.
-Common issues (string dates, wrong field names) are auto-fixed with warnings.
 
-See [**Catalog Format Guidelines**](CATALOG_FORMAT_GUIDELINES.md) for full specifications.
+Each step gets one column named `STEP_{i}_{date}_{label}`. Steps are not filtered by distance, never get postseismic terms, and are not pruned unless requested with `select_events(selector, event_type='step')`. Two steps on the same day (or a step on the day of an earthquake) produce identical columns. Antenna-type rows found in `eq_catalog` are moved to the step catalogue with a warning.
+
+Catalogs are validated on model creation. See the [Catalog Format Guidelines](CATALOG_FORMAT_GUIDELINES.md) for the full specification.
 
 ---
 
-## Configuration Options
-
-### ModelConfig Parameters
+## Configuration
 
 ```python
 ModelConfig(
-    # Spatial filtering
-    d_param=1.0,                           # Empirical scaling in radius law (None = no filtering)
+    # Spatial filtering: R = 10^((0.43*M - 0.7)/d); None = no filter
+    d_param=1.0,
+    d_param_sse=None,        # SSE override (omit to inherit d_param)
+    d_param_eq=0.8,          # earthquake override (omit to inherit d_param)
 
-    # Baseline model
-    include_seasonal=True,                  # Annual + semi-annual terms
-    acceleration_term=True,                 # Quadratic trend
+    # Baseline
+    include_seasonal=True,
+    acceleration_term=True,
 
-    # Postseismic filtering (4 tiers)
-    fit_postseismic_decay=True,             # Enable postseismic templates
-    postseismic_mag_threshold=6.5,          # Tier 1: Min magnitude for postseismic
-    postseismic_min_step_amplitude=2.0,     # Tier 2: Min step amplitude (mm)
-    enforce_postseismic_sign_consistency=True, # Tier 3: Post must match step sign
-    postseismic_selection_criterion='aic',  # Tier 4: 'aic', 'bic', 'ftest', 'always'
-    postseismic_selection_threshold=-2.0,   # ΔAIC/ΔBIC threshold (or p-value for F-test)
-    fit_best_postseismic_tau=True,          # Optimize τ per event from tau_grid
-    tau_grid=[7, 14, 30, 60, 90, 180, 1800], # Candidate τ values (days)
+    # Postseismic
+    fit_postseismic_decay=True,
+    postseismic_models=['log', 'exp'],
+    postseismic_allow_combined=True,
+    postseismic_mag_threshold=6.5,
+    postseismic_exp_min_mag=7.5,
+    postseismic_pair_min_mag=7.5,
+    postseismic_exp_min_ratio=2.0,
+    tau_grid=,[1][2][3][4][5]
+    tau_grid_exp=,
+    postseismic_min_step_amplitude=2.0,
+    enforce_postseismic_sign_consistency=True,
+    postseismic_selection_criterion='bic',
+    postseismic_selection_threshold=-2.0,
+    postseismic_backfit_passes=2,
+
+    # SSE timing optimisation
+    sse_optimize_timing=True,
+    sse_timing_tol_days=5.0,
+    sse_timing_tol_frac=0.25,
+    sse_timing_tol_max_days=30.0,
+    sse_min_duration_days=1,
+    sse_timing_step_days=1,
+    sse_timing_prior=True,
+    sse_timing_criterion='bic',
+    sse_timing_max_rounds=2,
+    sse_timing_allow_overlap=False,
 
     # Event merging
-    merge_earthquakes_same_day=False,       # Merge EQs on same day
-    merge_close_sse=False,                  # Merge temporally close SSEs
-    gap_merge_threshold=5                   # Days threshold for merging
+    merge_earthquakes_same_day=False,
+    merge_close_sse=False,
+    max_overlap_merge_sse=5,
 )
 ```
 
-### Event-Type Support
 
-```python
-eq_catalog = [
-    # Regular earthquake → gets step + postseismic (if passes filters)
-    {'date': datetime(2020, 3, 1), 'lat': 40.0, 'lon': -120.0, 'magnitude': 7.2},
+### Non-earthquake steps
 
-    # Antenna change → gets step only, NO postseismic
-    {'date': datetime(2020, 8, 15), 'event_type': 'antenna_change'},
+Antenna, receiver and monument changes go in a separate `step_catalog`, usually one file per station. They get one step column each, are never filtered by distance, never get postseismic terms, and are not pruned unless you ask (`select_events(selector, event_type='step')`).
 
-    # Equipment change → gets step only
-    {'date': datetime(2021, 2, 10), 'event_type': 'equipment_change'},
-]
 ```
+step_catalog = [
+    {'date': datetime(2013, 5, 2), 'event_type': 'antenna_change'},
+    {'date': datetime(2016, 8, 14), 'event_type': 'receiver_change'},
+]
+
+model = TrajectoryModel(..., eq_catalog=eq_catalog, step_catalog=step_catalog)
+```
+
+Columns are named `STEP_{i}_{date}_{label}`. Two steps on the same day, or a step on the day of an earthquake, give identical columns, and a warning is logged.
+Antenna-type rows still found in `eq_catalog` are moved to the step catalogue automatically, with a warning. The step catalogue is validated by `validate_step_catalog`.
+
 
 Supported event types:
 - `'earthquake'` (default): Co-seismic step + postseismic (if passes filters)
@@ -233,70 +263,46 @@ Supported event types:
 ## Example Log Output
 
 ```
-INFO: Initialized model: 1095 time points, 0 SSEs, 3 EQs
-INFO: Baseline design matrix: 1095 × 28
-INFO: Baseline SSR: 1245.67
-INFO:   EQ 1 (antenna_change): event type excludes postseismic → SKIPPED
-INFO: Filtered to 2/3 candidate EQs (criterion: aic)
-INFO:     EQ 0 (M7.2, step=8.5mm): τ=90d, ΔAIC=-15.3 → KEPT
-INFO:     EQ 2 (M6.8, step=4.1mm): τ=60d, ΔAIC=-8.2 → KEPT
-INFO: Final design matrix: 1095 × 30 (2/2 postseismic)
-INFO: Fit complete: RMS = 1.854 mm
+INFO: Initialized model: 1095 time points, 0 SSEs, 3 EQs, 1 steps
+INFO:   EQ 0 (M7.8, step=8.5mm): log tau=90d + exp tau=730d, ΔBIC=-15.3, Δχ²=-42.1 -> KEPT
+INFO:   EQ 2 (M6.8, step=4.1mm): log tau=60d, ΔBIC=-8.2, Δχ²=-19.0 -> KEPT
+...
 ```
 
 ---
 
 ## Advanced Usage
 
-### Custom fitting strategies
+### Fitting strategies
 
 ```python
 from trajmod.strategies.fitting import LassoFitter, IterativeRefinementFitter
 
-# LASSO with automatic regularization
-lasso_fitter = LassoFitter(cv=5, positive=False)
-results = model.fit(method=lasso_fitter)
-
-# Iterative outlier removal
-robust_fitter = IterativeRefinementFitter(max_iterations=10, threshold=3.0)
-results = model.fit(method=robust_fitter)
+results = model.fit(method=LassoFitter(cv=5, positive=False))
+results = model.fit(method=IterativeRefinementFitter(max_iterations=10, threshold=3.0))
 ```
 
-### Event selection/filtering
+### Event selection
 
 ```python
 from trajmod.events.event_selection import KneeEventSelector
 
-# Automatic SSE selection using knee detection
-selector = KneeEventSelector(
-    criterion='bic',
-    method='knee',
-    smooth_curve=True,
-    min_amplitude=1.0  # Minimum 1mm amplitude
-)
-
-selected_indices = model.select_events(
-    selector=selector,
-    event_type='sse',
-    plot=True,
-    save_plot='sse_selection.png'
-)
+selector = KneeEventSelector(criterion='bic', method='knee')
+selected = model.select_events(selector, event_type='sse', plot=True, save_plot='sse_selection.png')
 ```
+
+`event_type` can be `'sse'`, `'eq'` or `'step'`. Other selectors: `LassoEventSelector`, `MarginalScreeningSelector`, `ThresholdEventSelector`, `AmplitudeThresholdSelector`, `CompositeEventSelector`.
 
 ### Visualization
 
 ```python
-from trajmod.visualization import plot_trajectory_decomposition
+from trajmod.visualization import TrajectoryVisualizer
 
-# Plot data with model components
-plot_trajectory_decomposition(
-    model,
-    results,
-    save_path='trajectory_fit.png',
-    show_residuals=True,
-    show_components=True
-)
+TrajectoryVisualizer.plot_fit(model)
+TrajectoryVisualizer.plot_components(model)
 ```
+
+Also available: `plot_fit_windowed`, `plot_coefficients`, `plot_event_selection`, `plot_correlation_matrix`, `plot_acf`, `plot_periodogram`, `plot_residuals_vs_fitted`.
 
 ---
 
@@ -305,16 +311,19 @@ plot_trajectory_decomposition(
 ### Core Classes
 
 - **`TrajectoryModel`**: Main model class
-  - `build_design_matrix()`: Construct design matrix with multi-tier filtering
+  - `build_design_matrix()`: Construct design matrix with multi-level filtering (e.g., post-seismic)
   - `fit()`: Fit model with OLS or custom strategy
   - `predict()`: Predict at new time points
   - `select_events()`: Automatic event selection
+  - `fit_pruning()`: Fit model with automatic event pruning according to information reduction
+  - `reset_sse_timing()`: Optimize SSE templates with non-linear shrinking/expansion of templates
 
 - **`ModelConfig`**: Configuration dataclass
   - All model parameters with validation
 
 - **`ModelResults`**: Results container
-  - Coefficients, fitted values, residuals, uncertainties
+  - Coefficients, fitted values, residuals, uncertainties, template_names, rms, weighted rms, n_observations,
+  n_parameters, metadata, get_coefficient(name), summary()
 
 ### Template Functions
 
@@ -323,6 +332,7 @@ plot_trajectory_decomposition(
   - `seasonal_sin()`, `seasonal_cos()`
   - `step()`: Heaviside step for earthquakes
   - `log_decay()`: Logarithmic postseismic decay
+  - `exp_decay()`: Exponential (Maxwell-like) postseismic decay
   - `raised_cosine()`: SSE template
 
 ### Fitting Strategies
@@ -332,19 +342,6 @@ plot_trajectory_decomposition(
 - **`ElasticNetFitter`**: ElasticNet with CV
 - **`IterativeRefinementFitter`**: Robust fitting with outlier removal
 
----
-
-## Testing
-
-Run tests with:
-```bash
-pytest tests/
-```
-
-Run with coverage:
-```bash
-pytest --cov=trajmod tests/
-```
 
 ---
 
@@ -355,7 +352,7 @@ If you use this code in your research, please cite:
 ```bibtex
 @software{trajmod2026,
   author = {Costantino, Giuseppe},
-  title = {trajmod: Simple GNSS Trajectory Modeling},
+  title = {trajmod: the simple non-linear GNSS trajectory model},
   year = {2026},
   url = {https://github.com/gcostantino/trajmod}
 }
@@ -374,9 +371,8 @@ MIT License - see LICENSE file for details.
 Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new features
-4. Run `black` formatter and `flake8` linter
-5. Submit a pull request
+3. Run `black` formatter and `flake8` linter
+4. Submit a pull request
 
 ---
 
