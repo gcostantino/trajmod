@@ -65,8 +65,24 @@ Two modes, set with `nonlinear_prior_mode`:
 
 Events are matched by date, so the follower can have a different event set. Events the master doesn't contain are searched normally, and each follower still decides per component whether a postseismic term is significant.
 
-
 ---
+
+### Examples
+
+East-west component of two stations, fitted with the default configuration and the nonlinear SSE timing.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gcostantino/trajmod/refs/heads/main/assets/fit_ALBH.png" alt="Trajectory fit of the E-W component at station ALBH, Cascadia" width="90%">
+</p>
+
+*Example of modeled GNSS position time series for the station ALBH (Cascadia), E-W component.*
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gcostantino/trajmod/refs/heads/main/assets/fit_J550.png" alt="Trajectory fit of the E-W component at station J550, Japan" width="90%">
+</p>
+
+*Example of modeled GNSS position time series for the station J550 (Japan), E-W component.*
+
 
 ## Features
 
