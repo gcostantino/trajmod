@@ -342,18 +342,6 @@ class EventCatalog:
             else:
                 # Multiple events - keep largest
                 largest = max(events, key=lambda e: e.get('magnitude', 0))
-                # a possible modification to account for antenna changes and EQ in the same day:
-                # _NON_EQ = {'antenna_change', 'equipment_change', 'monument_change'}
-                #
-                # # prefer a real earthquake; tie-break on magnitude
-                # largest = max(
-                #     events,
-                #     key=lambda e: (e.get('event_type', 'earthquake') not in _NON_EQ,
-                #                    e.get('magnitude', 0)),
-                # )
-                # merged_event = largest.copy()
-                # merged_event['merged_types'] = sorted({e.get('event_type', 'earthquake') for e in events})
-                # merged_event['n_merged'] = len(events)
 
                 # Update to use the date (not datetime)
                 merged_event = largest.copy()

@@ -72,16 +72,18 @@ class TrajectoryModel:
         self.eq_catalog = eq_catalog or []
         self.step_catalog = step_catalog or []
 
-        if validate_catalogs:
-            self._validate_catalogs()
-
-        self.selected_sse = self._select_sse_events()
-        self.selected_eq = self._select_eq_events()
         legacy = [e for e in self.eq_catalog
                   if e.get('event_type', 'earthquake') in _NON_EQ_TYPES]
         if legacy:
             logger.warning(f"{len(legacy)} non-earthquake event(s) found in eq_catalog; "
                            f"move them to step_catalog")
+
+        if validate_catalogs:
+            self._validate_catalogs()
+            self._validate_step_catalog()
+
+        self.selected_sse = self._select_sse_events()
+        self.selected_eq = self._select_eq_events()
         self.selected_steps = self._select_step_events()
 
         # Accepted postseismic terms: [{'eq_idx', 'eq_day', 'tau', 'coeff_step', 'coeff_post'}]
@@ -266,7 +268,7 @@ class TrajectoryModel:
 
         Filtering strategy:
         1. Event type: non-earthquakes never get postseismic.
-        2. Magnitude threshold (postseismic_mag_threshold, otherwise always applied).
+        2. Magnitude threshold (postseismic_mag_threshold; set to 0 to disable).
         3. Step amplitude filter (applied in build_design_matrix).
         4. Statistical test (AIC/BIC/F-test, applied in build_design_matrix).
         """
@@ -370,6 +372,9 @@ class TrajectoryModel:
         step_sign = float(np.sign(coeff_step_ref))
 
         singles, pairs, rejected = [], [], None
+
+        if not self._postseismic_kinds(eq_mag):
+            return False, None, {'reason': f'no allowed postseismic kind at M{eq_mag:.1f}'}
 
         single = self._search_terms(eq_day, G_baseline, existing_cols, weights, builder, fitter,
                                     self._single_candidates(self._postseismic_kinds(eq_mag)))
@@ -504,7 +509,7 @@ class TrajectoryModel:
         """Build design matrix G with multi-tier postseismic selection.
 
         Filtering tiers:
-        1. Magnitude threshold (postseismic_mag_threshold, otherwise is always applied)
+        1. Magnitude threshold (postseismic_mag_threshold; set to 0 to disable)
         2. Step amplitude threshold (always applied)
         3. Sign consistency (postseismic must match step sign)
         4. Statistical significance (ΔAIC/ΔBIC/F-test, on weighted chi-square)
@@ -740,6 +745,21 @@ class TrajectoryModel:
     # ------------------------------------------------------------------ #
     # Event selection from catalogs
     # ------------------------------------------------------------------ #
+    def _validate_step_catalog(self) -> None:
+        """Validate and normalise the user step catalogue."""
+        from trajmod.events import validate_step_catalog
+        if not self.step_catalog:
+            return
+        is_valid, messages, fixed = validate_step_catalog(self.step_catalog, strict=False, fix=True)
+        if not is_valid:
+            if not fixed:
+                summary = "\n".join(f"  - {m}" for m in messages[:10])
+                raise ValueError(f"Invalid step catalog ({len(messages)} errors):\n{summary}")
+            logger.warning(f"Auto-fixed {len(messages)} issue(s) in step catalog:")
+            for msg in messages[:5]:
+                logger.warning(f"  - {msg}")
+        self.step_catalog = fixed
+
     def _select_sse_events(self) -> List[Dict]:
         selected = []
         for ev in self.sse_catalog:
@@ -930,7 +950,8 @@ class TrajectoryModel:
         """Fit model with automatic event pruning/selection.
 
         Args:
-            event_type: 'sse' or 'eq' - which events to prune
+            event_type: 'sse', 'eq' or 'step' - which events to prune
+                (default 'sse'; steps are pruned only if requested)
             criterion: 'aic', 'bic', or 'ssr'
             method: 'knee' or 'min'
             weights: Optional observation weights

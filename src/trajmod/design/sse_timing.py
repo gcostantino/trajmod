@@ -108,7 +108,7 @@ def optimize_sse_timing(t_days: np.ndarray,
         t0: reference datetime
         y: observations (NaN allowed)
         weights: w = 1/sigma (non-finite -> 0)
-        G_other: all NON-SSE columns (baseline, EQ steps, postseismic), shape (N, p)
+        G_other: all NON-SSE columns (baseline, EQ steps, non-EQ steps, postseismic), shape (N, p)
         sse_events: SSE dicts with 'start_day' and 'end_day' datetimes
         config: ModelConfig (sse_timing_* fields)
 

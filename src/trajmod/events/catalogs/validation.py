@@ -492,6 +492,47 @@ def _validate_depth(
 
     return None
 
+def validate_step_catalog(catalog, strict: bool = False, fix: bool = False):
+    """Validate a station step catalogue (antenna/equipment changes etc.).
+
+    Each step needs a date ('date', 'time' or 'step_day'; datetime, date or datetime64).
+    'event_type' is an optional label (default 'step'). Duplicates (same day and label)
+    are dropped. Returns (is_valid, messages, fixed_catalog), like the other validators.
+    """
+    import datetime as _dt
+    import numpy as _np
+
+    messages, fixed, seen = [], [], set()
+    for i, ev in enumerate(catalog or []):
+        if not isinstance(ev, dict):
+            messages.append(f"Step {i}: not a dict")
+            continue
+        day = ev.get('date') or ev.get('time') or ev.get('step_day')
+        if day is None:
+            messages.append(f"Step {i}: missing 'date'")
+            continue
+        if isinstance(day, _np.datetime64):
+            day = day.astype('datetime64[s]').astype(_dt.datetime)
+        elif isinstance(day, _dt.date) and not isinstance(day, _dt.datetime):
+            day = _dt.datetime.combine(day, _dt.time())
+        if not isinstance(day, _dt.datetime):
+            messages.append(f"Step {i}: date must be datetime/date/datetime64, got {type(day).__name__}")
+            continue
+        label = ev.get('event_type', 'step')
+        if not isinstance(label, str):
+            messages.append(f"Step {i}: event_type must be a string, got {type(label).__name__}")
+            label = str(label)
+        key = (day.date(), label)
+        if key in seen:
+            messages.append(f"Step {i}: duplicate '{label}' on {day.date()} dropped")
+            continue
+        seen.add(key)
+        evc = dict(ev)
+        evc['date'] = day
+        evc['event_type'] = label
+        fixed.append(evc)
+    return (not messages), messages, fixed
+
 
 # ============================================================================
 # Validation Summary

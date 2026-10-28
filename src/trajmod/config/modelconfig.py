@@ -31,7 +31,7 @@ class ModelConfig:
         postseismic_mag_threshold: Minimum magnitude for any post-seismic term
             (always applied; set 0 to disable)
         tau_grid: Candidate tau values (days) for post-seismic decay
-        fit_postseismic_decay: Whether to fit post-seismic log-decay terms
+        fit_postseismic_decay: Whether to fit post-seismic decay terms (log and/or exp)
         postseismic_selection_criterion: 'aic', 'bic', 'ftest' or 'always'
         postseismic_selection_threshold: Delta-AIC/BIC must be below this value
             (or p-value for 'ftest')
@@ -60,8 +60,6 @@ class ModelConfig:
         merge_earthquakes_same_day: Whether to merge earthquakes on the same day
         acceleration_term: Whether to include acceleration term
         envelope_periods: Extra seasonal periods (days) used when use_envelope_basis
-        bspline_knots: Number of knots for B-spline basis
-        bspline_degree: Degree of B-spline basis
 
         SSE timing optimisation (daily data, whole-day shifts):
         sse_optimize_timing: Optimise SSE start/end times within bounds around the catalog
@@ -93,7 +91,6 @@ class ModelConfig:
     postseismic_selection_threshold: float = -2  # dAIC/dBIC < -2 or p < 0.05
     postseismic_tau_penalty_params: int = 1  # 1 = amplitude only, 2 = amplitude + tau
     postseismic_backfit_passes: int = 2
-    fit_best_postseismic_tau: bool = True  # DEPRECATED: no longer used
     enforce_postseismic_sign_consistency: bool = True
     postseismic_min_step_amplitude: float = 5.0  # mm
 
@@ -120,9 +117,6 @@ class ModelConfig:
             365.25 / 3,  # ~121.75 days (4 months)
         ])
     )
-
-    bspline_knots: int = 20
-    bspline_degree: int = 3
 
     # SSE timing optimisation (off by default: no change unless requested)
     sse_optimize_timing: bool = False

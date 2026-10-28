@@ -2,7 +2,7 @@
 from trajmod.events.catalogs import CatalogAdapter, USGSAdapter, CatalogFetchError
 from trajmod.events.catalogs.catalog_fetcher import CatalogFetcher
 from trajmod.events.catalogs.validation import validate_earthquake_catalog, validate_sse_catalog, \
-    print_validation_summary
+    validate_step_catalog, print_validation_summary
 from trajmod.events.event_selection import (
     EventSelector,
     KneeEventSelector,
@@ -30,5 +30,6 @@ __all__ = [
     # catalog validation
     "validate_earthquake_catalog",
     "validate_sse_catalog",
+    "validate_step_catalog",
     "print_validation_summary"
 ]

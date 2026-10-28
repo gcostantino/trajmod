@@ -587,7 +587,8 @@ class TrajectoryVisualizer:
 
                 if comp_type == 'baseline':
                     # Match: offset, trend, acceleration
-                    if any(kw in name_lower for kw in ['offset', 'trend', 'accel']):
+                    if (not name_lower.startswith(('sse_', 'eq_', 'step_'))
+                            and any(kw in name_lower for kw in ['offset', 'trend', 'accel'])):
                         indices.append(j)
 
                 elif comp_type == 'seasonal':
