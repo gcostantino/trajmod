@@ -82,12 +82,23 @@ if __name__ == '__main__':
     config = ModelConfig(
         d_param=.8,
         include_seasonal=True,
-        postseismic_mag_threshold=6.5
+        postseismic_mag_threshold=8.5,
+        postseismic_models=['log', 'exp'],
+        postseismic_allow_combined=True,
+        postseismic_pair_min_mag=8.5,
+        acceleration_term=True,
     )
 
-    station_code = 'J214'
-    station_coordinates = np.array([36.800, 140.754])  # lat lon
-    min_time, max_time = 2000, 2025
+    #station_code = 'J214'
+    #station_coordinates = np.array([36.800, 140.754])  # lat lon
+
+    #station_code = 'J156'
+    #station_coordinates = np.array([40.515, 141.511])  # lat lon
+
+    station_code = 'J550'
+    station_coordinates = np.array([38.301, 141.501])  # lat lon
+
+    min_time, max_time = 1995, 2011
 
     date_lookup = ymd_decimal_year_lookup(from_decimal=False)
     lookup_decimal = ymd_decimal_year_lookup(from_decimal=True)
@@ -106,6 +117,14 @@ if __name__ == '__main__':
 
     '''plt.plot(time, ts)
     plt.show()'''
+
+    # load steps from master step file (exclude EQ)
+    steps = np.loadtxt('/Users/giuseppe/Documents/DATA/GNSS/NGL_info/steps.txt', dtype=str, usecols=(0, 1, 2, 3))
+    sta_steps = steps[steps[:, 0] == station_code]
+    sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
+
+    step_catalog = [
+        {'date': datetime(*lookup_decimal[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1]]
 
     station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
 
@@ -143,6 +162,7 @@ if __name__ == '__main__':
         station_lat=station_lat, station_lon=station_lon,
         sse_catalog=sse_events,
         eq_catalog=eq_catalogue,
+        step_catalog=step_catalog,
         config=config
     )
     print(model.G)
