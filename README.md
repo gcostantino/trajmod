@@ -44,9 +44,27 @@ With `sse_optimize_timing=True` (or `model.fit(optimize_sse_timing=True)`), the 
 - `sse_timing_prior=True` adds a Gaussian prior pulling start and end toward the catalogue.
 - A changed timing is accepted only if it improves the information criterion (`sse_timing_criterion`, 'bic' or 'aic').
 - The search is coordinate descent over all SSEs (`sse_timing_max_rounds` passes). Each round rebuilds the design matrix, so postseismic selection is rerun with the current SSE times. It stops when neither SSE times nor postseismic decisions change.
-- Each search starts from the catalogue times, so the tolerance is always centred on the catalogue.
+- Each search starts from the catalogue times, so the tolerance is centred on the catalogue (or on the master's times when a `nonlinear_prior` is used, see below).
 
 The outcome is in `results.metadata['sse_timing']`. Call `model.reset_sse_timing()` to go back to the catalogue times.
+
+### Sharing nonlinear parameters across components
+
+Postseismic decay times and SSE start and end times are physical properties of the source, so they are the same on every GNSS component, while amplitudes differ. The user can fit one component (the **master**, chosen from your prior knowledge of the signal), export its nonlinear parameters, and use them on the other components:
+
+- **Master.** A full fit (postseismic selection, SSE timing) on the component where the signal is clearest.
+- **`export_nonlinear()`.** Returns the postseismic kinds and taus (per earthquake) and the fitted SSE times as a plain, JSON-serialisable dict.
+- **Followers.** Pass the dict as `nonlinear_prior=` to the model of another component.
+
+Two modes, set with `nonlinear_prior_mode`:
+
+| Mode | Postseismic | SSE times |
+|---|---|---|
+| `fixed` (default) | The master's kind and tau for each matched earthquake | The master's start and end |
+| `window` | Same kinds; tau within `nonlinear_prior_tau_window` grid steps | Within `nonlinear_prior_sse_window_days` of the master's times |
+
+Events are matched by date, so the follower can have a different event set. Events the master doesn't contain are searched normally, and each follower still decides per component whether a postseismic term is significant.
+
 
 ---
 
@@ -273,6 +291,44 @@ INFO:   EQ 2 (M6.8, step=4.1mm): log tau=60d, ΔBIC=-8.2, Δχ²=-19.0 -> KEPT
 
 ## Advanced Usage
 
+### Multi-component workflow
+
+```python
+from trajmod.model import TrajectoryModel
+from trajmod.config import ModelConfig
+from trajmod.model.nonlinear_prior import save_prior, load_prior
+
+cfg = ModelConfig(sse_optimize_timing=True, postseismic_models=['log', 'exp'])
+
+# 1. Fit the master component (here the vertical, chosen from prior knowledge)
+master = TrajectoryModel(t=t, y=y_up, sigma_y=sigma_up,
+                         station_lat=lat, station_lon=lon,
+                         sse_catalog=sse_catalog, eq_catalog=eq_catalog, config=cfg)
+master.fit()
+
+# 2. Export its nonlinear parameters (optionally save them)
+prior = master.export_nonlinear()
+save_prior(prior, 'station_prior.json')        # load_prior('station_prior.json') to reuse
+
+# 3. Fit the other components with the master's parameters
+cfg_follow = ModelConfig(sse_optimize_timing=True, postseismic_models=['log', 'exp'],
+                         nonlinear_prior_mode='fixed')
+for name, (y, sigma) in {'E': (y_e, sigma_e), 'N': (y_n, sigma_n)}.items():
+    follower = TrajectoryModel(t=t, y=y, sigma_y=sigma,
+                               station_lat=lat, station_lon=lon,
+                               sse_catalog=sse_catalog, eq_catalog=eq_catalog,
+                               config=cfg_follow, nonlinear_prior=prior)
+    follower.fit()
+```
+
+Notes:
+
+- Use the same catalogues and config for the master and the followers, apart from the prior options.
+- `fixed` mode estimates amplitudes only, so uncertainties on the followers do not include the uncertainty of the shared taus and times. They are conditional on the master's values.
+- Compare the followers with independent fits if you suspect the components differ (for example a vertical component with a different time constant). Large differences mean the shared assumption is doubtful there.
+- The prior is a plain dict. `export_nonlinear()` works on any fitted model, so a follower can serve as the master for another component.
+
+
 ### Fitting strategies
 
 ```python
@@ -317,6 +373,9 @@ Also available: `plot_fit_windowed`, `plot_coefficients`, `plot_event_selection`
   - `select_events()`: Automatic event selection
   - `fit_pruning()`: Fit model with automatic event pruning according to information reduction
   - `reset_sse_timing()`: Optimize SSE templates with non-linear shrinking/expansion of templates
+  - `export_nonlinear()`: Nonlinear parameters of a fitted model (postseismic kinds and taus, SSE times) as a JSON-serialisable dict
+  - `TrajectoryModel(..., nonlinear_prior=dict)`: Use parameters exported from another component
+
 
 - **`ModelConfig`**: Configuration dataclass
   - All model parameters with validation
