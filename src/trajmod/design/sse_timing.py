@@ -31,8 +31,10 @@ class SSETimingResult:
 
 def sse_tolerance_days(start_day: datetime.datetime,
                        end_day: datetime.datetime,
-                       config) -> float:
+                       config, override=None) -> float:
     """Per-event tolerance: min(max_days, max(tol_days, frac * duration))."""
+    if override is not None:
+        return float(override)
     duration = max(0.0, (end_day - start_day).total_seconds() / 86400.0)
     tol = max(config.sse_timing_tol_days, config.sse_timing_tol_frac * duration)
     return float(min(config.sse_timing_tol_max_days, tol))
@@ -141,7 +143,7 @@ def optimize_sse_timing(t_days: np.ndarray,
 
     s0 = np.array([(ev['start_day'] - t0).days for ev in sse_events], dtype=float)
     e0 = np.array([(ev['end_day'] - t0).days for ev in sse_events], dtype=float)
-    tol = np.array([sse_tolerance_days(ev['start_day'], ev['end_day'], config)
+    tol = np.array([sse_tolerance_days(ev['start_day'], ev['end_day'], config, override=ev.get('timing_tol_days'))
                     for ev in sse_events])
     K = np.floor(tol / step).astype(int)
     sigma = np.maximum(tol / 2.0, 1.0)  # prior width in days

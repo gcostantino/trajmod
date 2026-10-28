@@ -1,5 +1,8 @@
 """Main TrajectoryModel class - orchestrates all components."""
 import datetime
+from trajmod.model.nonlinear_prior import (
+    build_prior, validate_prior, prior_terms_for, prior_sse_for)
+
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -37,7 +40,8 @@ class TrajectoryModel:
                  config: Optional[ModelConfig] = None,
                  time_converter: Optional[DecimalYearConverter] = None,
                  validate_catalogs: bool = True,
-                 step_catalog: Optional[List[Dict]] = None):
+                 step_catalog: Optional[List[Dict]] = None,
+                 nonlinear_prior: Optional[Dict] = None):
         """Initialize trajectory model.
 
         Args:
@@ -71,6 +75,11 @@ class TrajectoryModel:
         self.sse_catalog = sse_catalog or []
         self.eq_catalog = eq_catalog or []
         self.step_catalog = step_catalog or []
+
+        self._nl_prior: Optional[Dict] = nonlinear_prior
+        if self._nl_prior is not None:
+            validate_prior(self._nl_prior)
+
 
         legacy = [e for e in self.eq_catalog
                   if e.get('event_type', 'earthquake') in _NON_EQ_TYPES]
@@ -302,15 +311,45 @@ class TrajectoryModel:
     def _tau_grid_for(self, kind: str) -> List[float]:
         return list(self.config.tau_grid_exp if kind == 'exp' else self.config.tau_grid)
 
-    def _single_candidates(self, kinds: List[str]) -> List[List[Tuple[str, float]]]:
-        return [[(k, tau)] for k in kinds for tau in self._tau_grid_for(k)]
+    def _prior_terms(self, eq_day) -> Optional[List[Dict]]:
+        if self._nl_prior is None or eq_day is None:
+            return None
+        return prior_terms_for(self._nl_prior, eq_day)
 
-    def _pair_candidates(self) -> List[List[Tuple[str, float]]]:
+    def _near_grid(self, kind: str, tau: float) -> int:
+        grid = self._tau_grid_for(kind)
+        return int(np.argmin([abs(np.log(g) - np.log(tau)) for g in grid]))
+
+    def _filter_window(self, cands, prior):
+        """Keep candidates whose kinds are in the prior and whose taus are within the window."""
+        if prior is None:
+            return cands
+        w = int(self.config.nonlinear_prior_tau_window)
+        centre = {t['kind']: self._near_grid(t['kind'], t['tau']) for t in prior}
+        return [terms for terms in cands
+                if all(k in centre and abs(self._tau_grid_for(k).index(tau) - centre[k]) <= w
+                       for k, tau in terms)]
+
+    def _single_candidates(self, kinds: List[str], eq_day=None):
+        prior = self._prior_terms(eq_day)
+        if prior is not None and self.config.nonlinear_prior_mode == 'fixed':
+            return [[(t['kind'], float(t['tau']))] for t in prior if t['kind'] in kinds]
+        cands = [[(k, tau)] for k in kinds for tau in self._tau_grid_for(k)]
+        return self._filter_window(cands, prior)
+
+    def _pair_candidates(self, eq_day=None):
+        prior = self._prior_terms(eq_day)
+        if prior is not None:
+            if len(prior) != 2:
+                return []
+            if self.config.nonlinear_prior_mode == 'fixed':
+                return [[(t['kind'], float(t['tau'])) for t in prior]]
         ratio = float(getattr(self.config, 'postseismic_exp_min_ratio', 2.0))
-        return [[('log', tl), ('exp', te)]
-                for tl in self._tau_grid_for('log')
-                for te in self._tau_grid_for('exp')
-                if te >= ratio * tl]
+        cands = [[('log', tl), ('exp', te)]
+                 for tl in self._tau_grid_for('log')
+                 for te in self._tau_grid_for('exp')
+                 if te >= ratio * tl]
+        return self._filter_window(cands, prior)
 
     def _search_terms(self,
                       eq_day,
@@ -377,7 +416,7 @@ class TrajectoryModel:
             return False, None, {'reason': f'no allowed postseismic kind at M{eq_mag:.1f}'}
 
         single = self._search_terms(eq_day, G_baseline, existing_cols, weights, builder, fitter,
-                                    self._single_candidates(self._postseismic_kinds(eq_mag)))
+                                    self._single_candidates(self._postseismic_kinds(eq_mag), eq_day))
         if single is not None:
             if (not enforce) or all(np.sign(c) == step_sign for c in single['coeffs']):
                 singles.append(single)
@@ -386,7 +425,7 @@ class TrajectoryModel:
 
         if self._combined_allowed(eq_mag):
             pair = self._search_terms(eq_day, G_baseline, existing_cols, weights, builder, fitter,
-                                      self._pair_candidates(),
+                                      self._pair_candidates(eq_day),
                                       ref_sign=step_sign if enforce else None)
             if pair is not None:
                 pairs.append(pair)
@@ -480,9 +519,9 @@ class TrajectoryModel:
                             if self.config.enforce_postseismic_sign_consistency else None)
 
                 if len(group) == 1:
-                    cands = self._single_candidates([first.get('kind', 'log')])
+                    cands = self._single_candidates([first.get('kind', 'log')], first['eq_day'])
                 else:
-                    cands = self._pair_candidates()
+                    cands = self._pair_candidates(first['eq_day'])
 
                 best = self._search_terms(first['eq_day'], G_baseline, others, weights,
                                           builder, fitter, cands, ref_sign)
@@ -647,6 +686,28 @@ class TrajectoryModel:
         self.G = None
         self.post_specs = []
 
+    def _apply_sse_prior(self, catalog_sse: List[Dict]):
+        """SSEs centred on the master's fitted times (matched) or on the catalogue (unmatched)."""
+        w = (0.0 if self.config.nonlinear_prior_mode == 'fixed'
+             else float(self.config.nonlinear_prior_sse_window_days))
+
+        out, n_matched = [], 0
+        for ev in catalog_sse:
+            new = dict(ev)
+            m = prior_sse_for(self._nl_prior, ev['start_day'], ev['end_day'])
+            if m is not None:
+                new['start_day'] = datetime.datetime.fromisoformat(m['start'])
+                new['end_day'] = datetime.datetime.fromisoformat(m['end'])
+                if 'start' in new:
+                    new['start'] = new['start_day']
+                if 'end' in new:
+                    new['end'] = new['end_day']
+                new['timing_tol_days'] = w
+                n_matched += 1
+            out.append(new)
+        return out, n_matched
+
+
     def _optimize_sse_timing(self) -> None:
         """Alternate SSE timing optimisation and postseismic selection.
 
@@ -668,6 +729,12 @@ class TrajectoryModel:
         if self._sse_catalog_selected is None:
             self._sse_catalog_selected = [dict(e) for e in self.selected_sse]
         catalog_sse = self._sse_catalog_selected
+
+        if self._nl_prior is not None and self._nl_prior.get('sse'):
+            centre, n_matched = self._apply_sse_prior(catalog_sse)
+            logger.info(f"SSE prior: {n_matched}/{len(catalog_sse)} SSEs matched "
+                        f"({self.config.nonlinear_prior_mode})")
+            catalog_sse = centre
 
         max_rounds = int(getattr(self.config, 'sse_timing_max_rounds', 2))
         weights = self._default_weights()
@@ -996,6 +1063,9 @@ class TrajectoryModel:
         """
         do_timing = (self.config.sse_optimize_timing if optimize_sse_timing is None
                      else optimize_sse_timing)
+        if optimize_sse_timing is None and self._nl_prior is not None \
+                and self._nl_prior.get('sse'):
+            do_timing = True
 
         if do_timing and not self._sse_timing_done:
             self._optimize_sse_timing()
@@ -1084,3 +1154,14 @@ class TrajectoryModel:
                 f"{len(self.results.coeffs)} coefficients; re-fit the model before predicting.")
 
         return G_pred @ self.results.coeffs
+
+    def export_nonlinear(self) -> Dict:
+        """Nonlinear parameters of the fitted model (postseismic kinds and taus, SSE times).
+
+        Pass the result as `nonlinear_prior=` to the model of another component.
+        """
+        if self.G is None:
+            raise ValueError("fit the model before exporting its nonlinear parameters")
+        catalog = self._sse_catalog_selected or self.selected_sse
+        return build_prior(self.post_specs, self.selected_sse, catalog)
+

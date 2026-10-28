@@ -76,6 +76,22 @@ class ModelConfig:
         sse_timing_allow_overlap: Allow SSEs to overlap each other during timing optimisation
             (False keeps every SSE between its neighbours)
 
+        nonlinear_prior_mode: How a model uses nonlinear parameters exported from another
+            component (see TrajectoryModel.export_nonlinear and the nonlinear_prior argument)
+            'fixed': postseismic kinds and taus and SSE start/end times are taken from the
+                     prior for the events it contains; only amplitudes are fitted.
+            'window': the same parameters are searched, but only near the prior values
+                      (see the two fields below).
+            Events the prior does not contain are always searched normally, and the
+            significance tests for postseismic terms still apply per component.
+        nonlinear_prior_tau_window: In 'window' mode, number of tau-grid steps around the
+            prior tau that are searched (0 = the grid point nearest to the prior tau only)
+        nonlinear_prior_sse_window_days: In 'window' mode, half-width (days) of the search
+            around the prior SSE start and end times. Replaces the usual tolerance for
+            matched SSEs; the timing prior (sse_timing_prior) then pulls toward the
+            prior times.
+
+
     """
     d_param: Optional[float] = 1.0
     d_param_sse: Union[float, None, _Inherit] = INHERIT
@@ -129,6 +145,12 @@ class ModelConfig:
     sse_timing_criterion: str = 'bic'  # 'bic' or 'aic'
     sse_timing_max_rounds: int = 2
     sse_timing_allow_overlap: bool = False
+
+    nonlinear_prior_mode: str = 'fixed'            # 'fixed' or 'window'
+    nonlinear_prior_tau_window: int = 1            # window mode: grid steps around the prior tau
+    nonlinear_prior_sse_window_days: float = 3.0   # window mode: +/- days around prior SSE times
+
+
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -205,3 +227,12 @@ class ModelConfig:
             raise ValueError("sse_timing_criterion must be 'aic' or 'bic'")
         if self.sse_timing_max_rounds < 1:
             raise ValueError("sse_timing_max_rounds must be >= 1")
+
+        if self.nonlinear_prior_mode not in ('window', 'fixed'):
+            raise ValueError("nonlinear_prior_mode must be 'window' or 'fixed'")
+        if int(self.nonlinear_prior_tau_window) != self.nonlinear_prior_tau_window \
+                or self.nonlinear_prior_tau_window < 0:
+            raise ValueError("nonlinear_prior_tau_window must be an integer >= 0")
+        if self.nonlinear_prior_sse_window_days < 0:
+            raise ValueError("nonlinear_prior_sse_window_days must be non-negative")
+
