@@ -30,16 +30,15 @@ selected = model.select_events(selector, event_type='sse', plot=True)
 
 
 """
-import matplotlib.pyplot as plt
 
-from trajmod.events import CatalogFetcher
+import datetime
+
+import numpy as np
+
 from trajmod.events.amplitude_threshold_selector import AmplitudeThresholdSelector
 from trajmod.model.model import TrajectoryModel, ModelConfig
-from trajmod.events.event_selection import KneeEventSelector, LassoEventSelector, CompositeEventSelector
 from trajmod.model.nonlinear_prior import save_prior, load_prior
 from trajmod.visualization import TrajectoryVisualizer
-import numpy as np
-import datetime
 
 
 def ymd_decimal_year_lookup(from_decimal=False):
@@ -62,7 +61,7 @@ def ymd_decimal_year_lookup(from_decimal=False):
 
 
 if __name__ == '__main__':
-    component = 1
+    component = 0
     station_code = 'ALBH'
     station_coordinates = np.array([48.390, -123.487])  # lat lon  # do not forget to change that...
 
@@ -117,7 +116,7 @@ if __name__ == '__main__':
     ts = ts[time_filter]
     unc = unc[time_filter]
 
-    ts = ts * 1000  # mm
+    ts, unc = ts * 1000, unc * 1000  # mm
 
     '''plt.plot(time, ts)
     plt.show()'''
@@ -175,7 +174,9 @@ if __name__ == '__main__':
 
     # Visualize
     viz = TrajectoryVisualizer()
-    viz.plot_fit(model, show_uncertainty=True, show_residuals=True, save_path='fit.png')
+    viz.plot_fit(model, figsize=(12, 6), show_uncertainty=True, show_residuals=True,
+                 show_acf=False, show_histogram=False, show_qq=False,
+                 save_path=f'fit_{station_code}.pdf', errorbar_nsigma=1.)
     viz.plot_fit_windowed(model, window_size_years=2., overlap_years=0., save_dir='./windows/')
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
