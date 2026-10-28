@@ -15,18 +15,41 @@ class TrajectoryVisualizer:
     @staticmethod
     def plot_fit(model, figsize: Tuple[int, int] = (14, 12),
                  save_path: Optional[str] = None, show_uncertainty: bool = True,
-                 show_residuals: bool = True, label_position: Optional[str] = 'parallel'):
-        """Plot comprehensive model fit diagnostics with event markers."""
+                 errorbar_nsigma: float = 1.0, errorbar_alpha: float = 0.4,
+                 show_residuals: bool = True, show_acf: bool = True,
+                 show_histogram: bool = True, show_qq: bool = True,
+                 label_position: Optional[str] = 'parallel'):
+        """Plot the model fit with event markers and residual diagnostics.
+
+        Args:
+            model: fitted TrajectoryModel
+            figsize: figure size
+            save_path: if given, the figure is saved there
+            show_uncertainty: draw per-point error bars of the data (and on the residuals)
+            errorbar_nsigma: error bar half-length in units of sigma (1 = 1σ, 2 = 2σ)
+            errorbar_alpha: transparency of the error bars
+            show_residuals: show the residuals-vs-time panel
+            show_acf: show the residual autocorrelation panel
+            show_histogram: show the residual histogram panel
+            show_qq: show the residual Q-Q panel
+            label_position: placement of the event labels
+        """
         if model.results is None:
             raise ValueError("Model must be fit before plotting")
 
-        # Use ALL data (no filtering)
         fig = TrajectoryVisualizer._plot_fit_core(
             model=model,
-            t_mask=None,  # None = use all data
+            t_mask=None,
             window_title=None,
             figsize=figsize,
-            label_position=label_position
+            label_position=label_position,
+            show_uncertainty=show_uncertainty,
+            errorbar_nsigma=errorbar_nsigma,
+            errorbar_alpha=errorbar_alpha,
+            show_residuals=show_residuals,
+            show_acf=show_acf,
+            show_histogram=show_histogram,
+            show_qq=show_qq,
         )
 
         if save_path:
@@ -40,7 +63,11 @@ class TrajectoryVisualizer:
                           overlap_years: float = 0.0,
                           figsize: Tuple[int, int] = (14, 12),
                           save_dir: Optional[str] = None,
-                          label_position: Optional[str] = 'parallel'):
+                          label_position: Optional[str] = 'parallel',
+                          show_uncertainty: bool = True,
+                          show_residuals: bool = True, show_acf: bool = True,
+                          show_histogram: bool = True, show_qq: bool = True
+                          ):
         """Plot comprehensive diagnostics for sequential time windows.
 
         Creates the EXACT same plot as plot_fit(), but for sliding windows.
@@ -52,6 +79,11 @@ class TrajectoryVisualizer:
             figsize: Figure size for each window plot
             save_dir: Directory to save window plots (required)
             label_position: 'top' or 'parallel' for event labels
+            show_uncertainty: draw the observation 1-sigma error bars (data and residuals)
+            show_residuals: show the residuals-vs-time panel
+            show_acf: show the residual autocorrelation panel
+            show_histogram: show the residual histogram panel
+            show_qq: show the residual Q-Q panel
 
         Returns:
             List of figure objects (one per window)
@@ -113,13 +145,17 @@ class TrajectoryVisualizer:
             window_title = (f'Window {i + 1}/{len(windows)}: '
                             f'{win_start.strftime("%Y-%m-%d")} to {win_end.strftime("%Y-%m-%d")}')
 
-            # Use SAME core plotting function
             fig = TrajectoryVisualizer._plot_fit_core(
                 model=model,
                 t_mask=t_mask,
                 window_title=window_title,
                 figsize=figsize,
-                label_position=label_position
+                label_position=label_position,
+                show_uncertainty=show_uncertainty,
+                show_residuals=show_residuals,
+                show_acf=show_acf,
+                show_histogram=show_histogram,
+                show_qq=show_qq,
             )
 
             # Save
@@ -139,8 +175,26 @@ class TrajectoryVisualizer:
         return figures
 
     @staticmethod
+    def _draw_errorbars(ax, t, y, sigma, nsigma=1.0, color='gray', alpha=0.4,
+                        linewidth=0.6, max_sigma=None):
+        """Vertical error bars of +/- nsigma * sigma for every valid point."""
+        ok = np.isfinite(y) & np.isfinite(sigma) & (sigma > 0)
+        if max_sigma is not None:
+            ok &= sigma <= max_sigma
+        if not np.any(ok):
+            return
+        ax.errorbar(t[ok], y[ok], yerr=nsigma * sigma[ok], fmt='none',
+                    ecolor=color, elinewidth=linewidth, capsize=0,
+                    alpha=alpha, zorder=1)
+
+
+    @staticmethod
     def _plot_fit_core(model, t_mask=None, window_title=None,
-                       figsize=(14, 12), label_position='parallel'):
+                       figsize=(14, 12), label_position='parallel',
+                       show_uncertainty=True, errorbar_nsigma: float = 1.0, errorbar_alpha: float = 0.4,
+                       show_residuals=True, show_acf=True,
+                       show_histogram=True, show_qq=True):
+
         """Core plotting logic used by both plot_fit() and plot_fit_windowed().
 
         This is the SINGLE source of truth for the plot layout and styling.
@@ -150,7 +204,15 @@ class TrajectoryVisualizer:
             t_mask: Boolean mask for time filtering (None = use all data)
             window_title: Custom title (None = use default)
             figsize: Figure size
-            label_position: Event label position
+            label_position: placement of the event labels
+            show_uncertainty: draw per-point error bars of the data (and on the residuals)
+            errorbar_nsigma: error bar half-length in units of sigma (1 = 1σ, 2 = 2σ)
+            errorbar_alpha: transparency of the error bars
+            show_residuals: show the residuals-vs-time panel
+            show_acf: show the residual autocorrelation panel
+            show_histogram: show the residual histogram panel
+            show_qq: show the residual Q-Q panel
+
 
         Returns:
             Matplotlib figure
@@ -207,28 +269,42 @@ class TrajectoryVisualizer:
         # ========================================================================
         # Create figure (SINGLE SOURCE OF TRUTH for layout)
         # ========================================================================
-        fig = plt.figure(figsize=figsize)
-        gs = fig.add_gridspec(5, 2, hspace=0.35, wspace=0.3)
+        show_dist = show_histogram or show_qq
+        panels = [('main', 2)]
+        if show_residuals:
+            panels.append(('res', 1))
+        if show_acf:
+            panels.append(('acf', 1))
+        if show_dist:
+            panels.append(('dist', 1))
 
-        # ========================================================================
-        # Row 0-1: Main plot (Data + Fit) WITH EVENT MARKERS
-        # ========================================================================
-        ax1 = fig.add_subplot(gs[0:2, :])
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(len(panels), 2, height_ratios=[h for _, h in panels],
+                              hspace=0.35, wspace=0.3)
+        row = {name: i for i, (name, _) in enumerate(panels)}
+
+        # ---- Main plot: data + fit with event markers ----
+        ax1 = fig.add_subplot(gs[row['main'], :])
         valid = ~np.isnan(y_plot)
         ax1.plot(t_plot[valid], y_plot[valid], 'k.', alpha=0.3,
                  label='Data', markersize=2)
-        ax1.plot(t_plot, fitted_plot, 'r-',
-                 label='Fit', linewidth=1.5)
+        if show_uncertainty:
+            TrajectoryVisualizer._draw_errorbars(
+                ax1, t_plot, y_plot, uncertainties_plot,
+                nsigma=errorbar_nsigma, alpha=errorbar_alpha,
+                max_sigma=10 * np.nanmedian(uncertainties_plot[np.isfinite(uncertainties_plot)]))
+            ax1.plot([], [], color='gray', lw=1,
+                     label=f'Data ±{errorbar_nsigma:g}σ')
 
-        # Add event markers
+        ax1.plot(t_plot, fitted_plot, 'r-', label='Fit', linewidth=1.5)
+
         TrajectoryVisualizer._add_event_markers_to_axis(
             ax1, model, eq_plot, sse_plot,
             show_labels=True, label_position=label_position
         )
 
-        ax1.set_ylabel('Displacement (mm)', fontsize=12)
+        ax1.set_ylabel('Displacement (mm)', fontsize=12, fontweight='bold')
 
-        # Title: custom or default
         if window_title:
             title = f'{window_title}\nRMS: {rms_window:.2f} mm, WRMS: {wrms_window:.2f} mm'
         else:
@@ -238,113 +314,115 @@ class TrajectoryVisualizer:
         ax1.legend(loc='best', fontsize=9)
         ax1.grid(True, alpha=0.3)
 
-        # Set xlim if windowed
         if t_window_start is not None:
             ax1.set_xlim(t_window_start, t_window_end)
 
-        # ========================================================================
-        # Row 2: Residuals time series WITH EVENT MARKERS
-        # ========================================================================
-        ax2 = fig.add_subplot(gs[2, :], sharex=ax1)
-        ax2.plot(t_plot, residuals_plot, 'k.', alpha=0.5, markersize=2)
-        ax2.axhline(0, color='r', linestyle='--', linewidth=1)
-        ax2.axhline(3 * rms_window, color='orange', linestyle=':',
-                    linewidth=1, alpha=0.7, label='±3σ')
-        ax2.axhline(-3 * rms_window, color='orange', linestyle=':',
-                    linewidth=1, alpha=0.7)
+        # ---- Residuals vs time ----
+        if show_residuals:
+            ax2 = fig.add_subplot(gs[row['res'], :], sharex=ax1)
+            ax2.plot(t_plot, residuals_plot, 'k.', alpha=0.5, markersize=2)
+            if show_uncertainty:
+                TrajectoryVisualizer._draw_errorbars(
+                    ax2, t_plot, residuals_plot, uncertainties_plot,
+                    nsigma=errorbar_nsigma, alpha=errorbar_alpha,
+                    max_sigma=10 * np.nanmedian(uncertainties_plot[np.isfinite(uncertainties_plot)]))
 
-        # Add event markers (no labels)
-        TrajectoryVisualizer._add_event_markers_to_axis(
-            ax2, model, eq_plot, sse_plot,
-            show_labels=False, label_position=None
-        )
+            ax2.axhline(0, color='r', linestyle='--', linewidth=1)
+            ax2.axhline(3 * rms_window, color='orange', linestyle=':',
+                        linewidth=1, alpha=0.7, label='±3σ')
+            ax2.axhline(-3 * rms_window, color='orange', linestyle=':',
+                        linewidth=1, alpha=0.7)
 
-        ax2.set_ylabel('Residuals (mm)', fontsize=11)
-        ax2.set_title('Residuals vs Time', fontsize=11, fontweight='bold')
-        ax2.legend(loc='upper right', fontsize=9)
-        ax2.grid(True, alpha=0.3)
+            TrajectoryVisualizer._add_event_markers_to_axis(
+                ax2, model, eq_plot, sse_plot,
+                show_labels=False, label_position=None
+            )
 
-        # ========================================================================
-        # Row 3: Autocorrelation Function (ACF)
-        # ========================================================================
-        ax3 = fig.add_subplot(gs[3, :])
+            ax2.set_ylabel('Residuals (mm)', fontsize=11, fontweight='bold')
+            ax2.set_title('Residuals vs Time', fontsize=11, fontweight='bold')
+            ax2.legend(loc='upper right', fontsize=9)
+            ax2.grid(True, alpha=0.3)
 
-        if len(residuals_clean) > 10:
-            max_lag = min(50, len(residuals_clean) // 4)
-            lags = range(max_lag + 1)
-            acf = []
+        # ---- Autocorrelation ----
+        if show_acf:
+            ax3 = fig.add_subplot(gs[row['acf'], :])
 
-            for lag in lags:
-                if lag == 0:
-                    acf.append(1.0)
-                else:
-                    r1 = residuals_clean[:-lag]
-                    r2 = residuals_clean[lag:]
-                    if len(r1) > 0:
-                        acf.append(np.corrcoef(r1, r2)[0, 1])
+            if len(residuals_clean) > 10:
+                max_lag = min(50, len(residuals_clean) // 4)
+                lags = range(max_lag + 1)
+                acf = []
+
+                for lag in lags:
+                    if lag == 0:
+                        acf.append(1.0)
                     else:
-                        acf.append(0.0)
+                        r1 = residuals_clean[:-lag]
+                        r2 = residuals_clean[lag:]
+                        if len(r1) > 0:
+                            acf.append(np.corrcoef(r1, r2)[0, 1])
+                        else:
+                            acf.append(0.0)
 
-            ax3.stem(lags, acf, basefmt=' ', linefmt='steelblue', markerfmt='o')
-            ax3.axhline(0, color='k', linestyle='-', linewidth=0.5)
+                ax3.stem(lags, acf, basefmt=' ', linefmt='steelblue', markerfmt='o')
+                ax3.axhline(0, color='k', linestyle='-', linewidth=0.5)
 
-            # 95% confidence interval
-            conf = 1.96 / np.sqrt(len(residuals_clean))
-            ax3.axhline(conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
-            ax3.axhline(-conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
-            ax3.fill_between(lags, -conf, conf, alpha=0.2, color='red')
+                conf = 1.96 / np.sqrt(len(residuals_clean))
+                ax3.axhline(conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
+                ax3.axhline(-conf, color='r', linestyle='--', linewidth=1, alpha=0.7)
+                ax3.fill_between(lags, -conf, conf, alpha=0.2, color='red')
 
-            ax3.set_ylim([-1, 1])
-        else:
-            ax3.text(0.5, 0.5, 'Insufficient data for ACF',
-                     ha='center', va='center', transform=ax3.transAxes, fontsize=11)
+                ax3.set_ylim([-1, 1])
+            else:
+                ax3.text(0.5, 0.5, 'Insufficient data for ACF',
+                         ha='center', va='center', transform=ax3.transAxes, fontsize=11)
 
-        ax3.set_xlabel('Lag (days)', fontsize=11)
-        ax3.set_ylabel('Autocorrelation', fontsize=11)
-        ax3.set_title('Residual Autocorrelation (should be within red bands)',
-                      fontsize=11, fontweight='bold')
-        ax3.grid(alpha=0.3)
+            ax3.set_xlabel('Lag (days)', fontsize=11)
+            ax3.set_ylabel('Autocorrelation', fontsize=11)
+            ax3.set_title('Residual Autocorrelation (should be within red bands)',
+                          fontsize=11, fontweight='bold')
+            ax3.grid(alpha=0.3)
 
-        # ========================================================================
-        # Row 4: Left - Histogram, Right - Q-Q Plot
-        # ========================================================================
-        ax4 = fig.add_subplot(gs[4, 0])
+        # ---- Histogram and Q-Q ----
+        if show_dist:
+            r = row['dist']
+            if show_histogram:
+                ax4 = fig.add_subplot(gs[r, 0] if show_qq else gs[r, :])
 
-        if len(residuals_clean) > 10:
-            n_bins = min(50, max(10, len(residuals_clean) // 5))
-            ax4.hist(residuals_clean, bins=n_bins, density=True, alpha=0.7,
-                     color='steelblue', edgecolor='black')
+                if len(residuals_clean) > 10:
+                    n_bins = min(50, max(10, len(residuals_clean) // 5))
+                    ax4.hist(residuals_clean, bins=n_bins, density=True, alpha=0.7,
+                             color='steelblue', edgecolor='black')
 
-            # Overlay normal distribution
-            mu, sigma = 0, rms_window
-            x = np.linspace(residuals_clean.min(), residuals_clean.max(), 100)
-            ax4.plot(x, 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
-                     'r-', linewidth=2, label='N(0, σ²)')
-            ax4.legend(fontsize=9)
-        else:
-            ax4.text(0.5, 0.5, 'Insufficient data',
-                     ha='center', va='center', transform=ax4.transAxes, fontsize=11)
+                    mu, sigma = 0, rms_window
+                    x = np.linspace(residuals_clean.min(), residuals_clean.max(), 100)
+                    ax4.plot(x, 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
+                             'r-', linewidth=2, label='N(0, σ²)')
+                    ax4.legend(fontsize=9)
+                else:
+                    ax4.text(0.5, 0.5, 'Insufficient data',
+                             ha='center', va='center', transform=ax4.transAxes, fontsize=11)
 
-        ax4.set_xlabel('Residuals (mm)', fontsize=10)
-        ax4.set_ylabel('Density', fontsize=10)
-        ax4.set_title('Residual Distribution', fontsize=11, fontweight='bold')
-        ax4.grid(True, alpha=0.3)
+                ax4.set_xlabel('Residuals (mm)', fontsize=10)
+                ax4.set_ylabel('Density', fontsize=10)
+                ax4.set_title('Residual Distribution', fontsize=11, fontweight='bold')
+                ax4.grid(True, alpha=0.3)
 
-        # Q-Q plot
-        ax5 = fig.add_subplot(gs[4, 1])
+            if show_qq:
+                ax5 = fig.add_subplot(gs[r, 1] if show_histogram else gs[r, :])
 
-        if len(residuals_clean) > 10:
-            probplot(residuals_clean, dist="norm", plot=ax5)
-        else:
-            ax5.text(0.5, 0.5, 'Insufficient data',
-                     ha='center', va='center', transform=ax5.transAxes, fontsize=11)
+                if len(residuals_clean) > 10:
+                    probplot(residuals_clean, dist="norm", plot=ax5)
+                else:
+                    ax5.text(0.5, 0.5, 'Insufficient data',
+                             ha='center', va='center', transform=ax5.transAxes, fontsize=11)
 
-        ax5.set_title('Q-Q Plot (Normality Check)', fontsize=11, fontweight='bold')
-        ax5.grid(True, alpha=0.3)
+                ax5.set_title('Q-Q Plot (Normality Check)', fontsize=11, fontweight='bold')
+                ax5.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
         return fig
+
 
     @staticmethod
     def _add_event_markers_to_axis(ax, model, eq_list, sse_list,
