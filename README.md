@@ -207,8 +207,8 @@ ModelConfig(
     postseismic_exp_min_mag=7.5,
     postseismic_pair_min_mag=7.5,
     postseismic_exp_min_ratio=2.0,
-    tau_grid=,[1][2][3][4][5]
-    tau_grid_exp=,
+    tau_grid=[7, 14, 30, 60, 90, 180, 1800],
+    tau_grid_exp=[180, 365, 730, 1460, 2920],
     postseismic_min_step_amplitude=2.0,
     enforce_postseismic_sign_consistency=True,
     postseismic_selection_criterion='bic',
