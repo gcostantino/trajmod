@@ -17,8 +17,20 @@ class DesignMatrixBuilder:
     """Builder for design matrix G.
 
     Column order (stable, relied upon by name-based lookups):
-        offset, trend, [acceleration], [seasonal terms], SSE_*, EQ_*_step, EQ_*_log_tau*
-        offset, trend, [acceleration], [seasonal], SSE_*, EQ_*_step, STEP_*, EQ_*_log_tau*
+        offset, trend, [acceleration], [seasonal], SSE_*, EQ_*_step, STEP_*,
+        EQ_*_log_tau*, EQ_*_exp_tau*
+
+    Column names:
+        SSE_{i}_{start}_to_{end}             SSE raised-cosine template
+        EQ_{i}_{date}_step                   earthquake step
+        STEP_{i}_{date}_{label}              non-earthquake step (antenna, equipment, ...)
+        EQ_{i}_{date}_log_tau{tau}           log postseismic term
+        EQ_{i}_{date}_exp_tau{tau}           exponential postseismic term
+
+    Postseismic columns follow the order of post_specs, one column per term. An
+    earthquake with a log+exp pair has two consecutive specs with the same eq_idx,
+    so its log and exp columns are not necessarily adjacent to other earthquakes'
+    columns of the same kind.
     """
 
     def __init__(self, templates: TemplateFunctions, config: ModelConfig):
@@ -40,9 +52,10 @@ class DesignMatrixBuilder:
             selected_sse: SSE event dicts (with 'start_day', 'end_day').
             selected_eq: Earthquake event dicts (with 'eq_day').
             post_specs: Optional accepted postseismic terms, one dict per term:
-                {'eq_idx': int, 'eq_day': datetime, 'tau': float}.
-                'eq_idx' is the index of the earthquake in selected_eq.
-                If None or empty, no postseismic columns are added.
+                {'eq_idx': int, 'eq_day': datetime, 'tau': float, 'kind': 'log' | 'exp'}.
+                'kind' defaults to 'log' when absent. 'eq_idx' is the index of the
+                earthquake in selected_eq. A log+exp pair is two terms with the same
+                'eq_idx'. If None or empty, no postseismic columns are added.
 
         Returns:
             (G, template_names)
@@ -184,7 +197,6 @@ class DesignMatrixBuilder:
             columns.append(self.templates.step(ev['step_day']))
             self.template_names.append(self.step_name(i, ev))
         return columns
-
 
     def _build_postseismic_templates(self, post_specs: List[Dict]) -> List[np.ndarray]:
         columns = []
