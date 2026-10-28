@@ -88,3 +88,4 @@ dmypy.json
 data/
 outputs/
 *.png
+!assets/*.png

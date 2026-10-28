@@ -176,7 +176,7 @@ if __name__ == '__main__':
     viz = TrajectoryVisualizer()
     viz.plot_fit(model, figsize=(12, 6), show_uncertainty=True, show_residuals=True,
                  show_acf=False, show_histogram=False, show_qq=False,
-                 save_path=f'fit_{station_code}.pdf', errorbar_nsigma=1.)
+                 save_path=f'fit_{station_code}.png', errorbar_nsigma=1.)
     viz.plot_fit_windowed(model, window_size_years=2., overlap_years=0., save_dir='./windows/')
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
