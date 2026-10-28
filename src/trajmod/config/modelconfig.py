@@ -1,8 +1,18 @@
 """Configuration management for GNSS trajectory modeling."""
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
+
+
+class _Inherit:
+    """Marker: take the value from the shared d_param."""
+
+    def __repr__(self) -> str:
+        return 'INHERIT'
+
+
+INHERIT = _Inherit()
 
 
 @dataclass
@@ -10,12 +20,16 @@ class ModelConfig:
     """Configuration for TrajectoryModel parameters.
 
     Attributes:
-        d_param: Empirical scaling parameter in radius law
+        d_param: Shared default of the empirical scaling parameter in the radius law
+            R = 10^((0.43*M - 0.7)/d). Used for d_param_sse and d_param_eq when those are
+            not given. None disables the spatial filter
+        d_param_sse: Radius-law parameter for SSEs (default: d_param; None = no filter)
+        d_param_eq: Radius-law parameter for earthquakes (default: d_param; None = no filter)
         include_seasonal: Whether to include annual & semi-annual terms
         use_envelope_basis: Whether to add extra seasonal periods (envelope_periods)
 
-        postseismic_mag_threshold: Minimum magnitude for post-seismic template
-            (only used when d_param is set)
+        postseismic_mag_threshold: Minimum magnitude for any post-seismic term
+            (always applied; set 0 to disable)
         tau_grid: Candidate tau values (days) for post-seismic decay
         fit_postseismic_decay: Whether to fit post-seismic log-decay terms
         postseismic_selection_criterion: 'aic', 'bic', 'ftest' or 'always'
@@ -66,6 +80,9 @@ class ModelConfig:
 
     """
     d_param: Optional[float] = 1.0
+    d_param_sse: Union[float, None, _Inherit] = INHERIT
+    d_param_eq: Union[float, None, _Inherit] = INHERIT
+
     include_seasonal: bool = True
     use_envelope_basis: bool = False
     postseismic_mag_threshold: float = 6.5
@@ -84,9 +101,8 @@ class ModelConfig:
     tau_grid_exp: List[int] = field(default_factory=lambda: [180, 365, 730, 1460, 2920])
     postseismic_allow_combined: bool = False  # log + exp for the same earthquake
     postseismic_exp_min_ratio: float = 2.0  # tau_exp >= ratio * tau_log in a combined pair
-    postseismic_exp_min_mag: float = 7.5    # min magnitude to allow an exp-only term
-    postseismic_pair_min_mag: float = 7.5   # min magnitude to allow a log+exp pair
-
+    postseismic_exp_min_mag: float = 7.5  # min magnitude to allow an exp-only term
+    postseismic_pair_min_mag: float = 7.5  # min magnitude to allow a log+exp pair
 
     merge_close_sse: bool = True
     max_overlap_merge_sse: int = 5  # days
@@ -122,8 +138,14 @@ class ModelConfig:
 
     def __post_init__(self):
         """Validate configuration parameters."""
-        if self.d_param is not None and self.d_param <= 0:
-            raise ValueError(f"d_param must be positive, got {self.d_param}")
+        if self.d_param_sse is INHERIT:
+            self.d_param_sse = self.d_param
+        if self.d_param_eq is INHERIT:
+            self.d_param_eq = self.d_param
+        for name in ('d_param', 'd_param_sse', 'd_param_eq'):
+            v = getattr(self, name)
+            if v is not None and v <= 0:
+                raise ValueError(f"{name} must be positive, got {v}")
 
         if self.postseismic_mag_threshold < 0:
             raise ValueError("postseismic_mag_threshold must be non-negative")

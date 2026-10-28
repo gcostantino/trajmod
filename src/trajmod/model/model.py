@@ -255,7 +255,7 @@ class TrajectoryModel:
 
         Filtering strategy:
         1. Event type: non-earthquakes never get postseismic.
-        2. Magnitude threshold, ONLY if d_param is set (catalog pre-filtered otherwise).
+        2. Magnitude threshold (postseismic_mag_threshold, otherwise always applied).
         3. Step amplitude filter (applied in build_design_matrix).
         4. Statistical test (AIC/BIC/F-test, applied in build_design_matrix).
         """
@@ -266,8 +266,6 @@ class TrajectoryModel:
             return False
 
         if event_type == 'earthquake':
-            if self.config.d_param is None:
-                return True
             return eq.get('magnitude', 0) >= self.config.postseismic_mag_threshold
 
         logger.warning(f"  Unknown event_type '{event_type}' -> no postseismic")
@@ -495,7 +493,7 @@ class TrajectoryModel:
         """Build design matrix G with multi-tier postseismic selection.
 
         Filtering tiers:
-        1. Magnitude threshold (if d_param is set)
+        1. Magnitude threshold (postseismic_mag_threshold, otherwise is always applied)
         2. Step amplitude threshold (always applied)
         3. Sign consistency (postseismic must match step sign)
         4. Statistical significance (ΔAIC/ΔBIC/F-test, on weighted chi-square)
@@ -742,12 +740,12 @@ class TrajectoryModel:
                              f"{evc['start_day']} to {evc['end_day']}")
                 continue
 
-            if self.config.d_param is None:
+            if self.config.d_param_sse is None:
                 selected.append(evc)
             else:
                 dist = self.geocalc.distance_km(
                     self.station_lat, self.station_lon, ev['lat'], ev['lon'])
-                rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param)
+                rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param_sse)
                 if dist <= rad:
                     selected.append(evc)
 
@@ -772,10 +770,10 @@ class TrajectoryModel:
                 logger.debug(f"Skipping earthquake outside time range: {evc['eq_day']}")
                 continue
 
-            if self.config.d_param is not None:
+            if self.config.d_param_eq is not None:
                 dist = self.geocalc.distance_km(
                     self.station_lat, self.station_lon, ev['lat'], ev['lon'])
-                rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param)
+                rad = self.geocalc.radius_from_magnitude(ev['magnitude'], self.config.d_param_eq)
                 if dist <= rad:
                     selected.append(evc)
             else:
