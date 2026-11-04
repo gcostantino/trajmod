@@ -1,36 +1,3 @@
-"""
-
-# === KNEE SELECTOR (Enhanced) ===
-selector = KneeEventSelector(
-    criterion='bic',       # 'aic', 'bic', or 'ssr'
-    smooth_curve=True,     # Smooth noisy curves
-    min_amplitude=2.0      # Filter small events
-)
-
-# === AMPLITUDE THRESHOLD ===
-selector = AmplitudeThresholdSelector(
-    threshold=3.0,         # Threshold value
-    mode='snr'             # 'absolute', 'relative', or 'snr'
-)
-
-# === LASSO ===
-selector = LassoEventSelector(cv=5)
-
-# === MARGINAL SCREENING ===
-selector = MarginalScreeningSelector(alpha=0.05, use_fdr=True)
-
-# === COMPOSITE ===
-selector = CompositeEventSelector(
-    [selector1, selector2],
-    mode='intersection'    # 'intersection' (AND) or 'union' (OR)
-)
-
-# === USE ANY SELECTOR ===
-selected = model.select_events(selector, event_type='sse', plot=True)
-
-
-"""
-
 import datetime
 
 import numpy as np
@@ -60,6 +27,24 @@ def ymd_decimal_year_lookup(from_decimal=False):
         return inv_lookup
 
 
+def strdate_decimal_year_lookup(from_decimal=False):
+    import re
+    """Returns a lookup table for strdate (e.g., 29DEC28) to decimal year, with the convention introduced by Nasa JPL."""
+    ymd_decimal_lookup = dict()
+    with open('/Users/giuseppe/Documents/DATA/common/date_utils/decyr.txt', 'r') as f:
+        next(f)
+        for line in f:
+            line = re.sub(' +', ' ', line)
+            split_line = line.split(' ')
+            strdate, decimal = str(split_line[0]), float(split_line[1])
+            ymd_decimal_lookup[strdate] = decimal
+    if not from_decimal:
+        return ymd_decimal_lookup
+    else:
+        inv_lookup = {v: k for k, v in ymd_decimal_lookup.items()}
+        return inv_lookup
+
+
 if __name__ == '__main__':
     component = 0
     station_code = 'ALBH'
@@ -74,8 +59,8 @@ if __name__ == '__main__':
         acceleration_term=False,
 
         sse_optimize_timing=True,
-        #sse_timing_tol_days=20.,  # larger tolerance -> larger shrinking factor
-        sse_timing_prior = False,
+        # sse_timing_tol_days=20.,  # larger tolerance -> larger shrinking factor
+        sse_timing_prior=False,
         sse_timing_tol_frac=1.,  # tolerance = 15 d for a 30-d event
         sse_timing_tol_max_days=120,  # cap, default is fine
         sse_min_duration_days=3,  # stops it collapsing to a step
@@ -83,18 +68,17 @@ if __name__ == '__main__':
         sse_timing_allow_overlap=False,
     )
 
-
-
     date_lookup = ymd_decimal_year_lookup(from_decimal=True)
+    strdate_lut = strdate_decimal_year_lookup(from_decimal=False)
 
     steps = np.loadtxt('/Users/giuseppe/Documents/DATA/GNSS/NGL_info/steps.txt', dtype=str, usecols=(0, 1, 2, 3))
     sta_steps = steps[steps[:, 0] == station_code]
-    sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
+    sta_steps = sta_steps[sta_steps[:, 2] == '1']  # Elevation_Cutoff_Changed
 
     step_catalog = [
-        {'date': datetime(*date_lookup[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
-        (dcyr > min_time and dcyr < max_time)]
-
+        {'date': datetime.datetime(*date_lookup[strdate_lut[strdate]]), 'event_type': 'antenna_change'} for strdate in
+        sta_steps[:, 1] if
+        (min_time < strdate_lut[strdate] < max_time)]
 
     # data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.txt')
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_CASCADIA/txt_with_unc/{station_code}.NA.tenv3')
@@ -147,7 +131,6 @@ if __name__ == '__main__':
     )
     print(model.G)
 
-
     selector = AmplitudeThresholdSelector(
         threshold=.5,  # mm
         mode='absolute'
@@ -170,7 +153,7 @@ if __name__ == '__main__':
         prior = model.export_nonlinear()
         save_prior(prior, f'{station_code}_prior.json')
 
-    #print(results.metadata['sse_timing']['events'])
+    # print(results.metadata['sse_timing']['events'])
 
     # Visualize
     viz = TrajectoryVisualizer()
@@ -181,8 +164,8 @@ if __name__ == '__main__':
 
     viz.plot_coefficients(results, top_n=20, save_path='coeffs.png')
     viz.plot_components(model, save_path='components.png')
-    #viz.plot_correlation_matrix(results, save_path='correlation_matrix.png')
-    #viz.plot_acf(results, save_path='acf.png')
+    # viz.plot_correlation_matrix(results, save_path='correlation_matrix.png')
+    # viz.plot_acf(results, save_path='acf.png')
     viz.plot_periodogram(results, save_path='periodogram.png')
     viz.plot_residuals_vs_fitted(results, save_path='residuals.png')
 

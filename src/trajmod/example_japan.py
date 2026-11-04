@@ -28,6 +28,24 @@ def ymd_decimal_year_lookup(from_decimal=False):
         return inv_lookup
 
 
+def strdate_decimal_year_lookup(from_decimal=False):
+    import re
+    """Returns a lookup table for strdate (e.g., 29DEC28) to decimal year, with the convention introduced by Nasa JPL."""
+    ymd_decimal_lookup = dict()
+    with open('/Users/giuseppe/Documents/DATA/common/date_utils/decyr.txt', 'r') as f:
+        next(f)
+        for line in f:
+            line = re.sub(' +', ' ', line)
+            split_line = line.split(' ')
+            strdate, decimal = str(split_line[0]), float(split_line[1])
+            ymd_decimal_lookup[strdate] = decimal
+    if not from_decimal:
+        return ymd_decimal_lookup
+    else:
+        inv_lookup = {v: k for k, v in ymd_decimal_lookup.items()}
+        return inv_lookup
+
+
 if __name__ == '__main__':
 
     component = 0
@@ -68,6 +86,7 @@ if __name__ == '__main__':
     )
 
     date_lookup = ymd_decimal_year_lookup(from_decimal=True)
+    strdate_lut = strdate_decimal_year_lookup(from_decimal=False)
 
     data = np.loadtxt(f'/Users/giuseppe/Documents/DATA/GNSS/GNSS_JAPAN/txt_with_unc/{station_code}.txt')
 
@@ -86,11 +105,12 @@ if __name__ == '__main__':
     # load steps from master step file (exclude EQ)
     steps = np.loadtxt('/Users/giuseppe/Documents/DATA/GNSS/NGL_info/steps.txt', dtype=str, usecols=(0, 1, 2, 3))
     sta_steps = steps[steps[:, 0] == station_code]
-    sta_steps = sta_steps[sta_steps[:, 1] == '1']  # Elevation_Cutoff_Changed
+    sta_steps = sta_steps[sta_steps[:, 2] == '1']  # Elevation_Cutoff_Changed
 
     step_catalog = [
-        {'date': datetime(*date_lookup[dcyr]), 'event_type': 'antenna_change'} for dcyr in sta_steps[:, 1] if
-        (dcyr > min_time and dcyr < max_time)]
+        {'date': datetime.datetime(*date_lookup[strdate_lut[strdate]]), 'event_type': 'antenna_change'} for strdate in
+        sta_steps[:, 1] if
+        (min_time < strdate_lut[strdate] < max_time)]
 
     station_lat, station_lon = float(station_coordinates[0]), float(station_coordinates[1])
 

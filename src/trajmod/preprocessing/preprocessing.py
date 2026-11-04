@@ -25,7 +25,7 @@ class TimeSeriesPreprocessor:
         t_decyr = self.converter.array_to_decimal(t)
 
         start_datetime, end_datetime = t.min(), t.max()
-        n_days = (end_datetime - start_datetime).days
+        n_days = (end_datetime - start_datetime).days + 1
         full_time_dtime = np.linspace(start_datetime, end_datetime, n_days)
         full_time_decyr = self.converter.array_to_decimal(full_time_dtime)
 
